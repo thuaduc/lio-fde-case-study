@@ -7,6 +7,7 @@ import { Alert } from '@/components/base';
 import type { ProcurementRequestWithDetails } from '@/types/database';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { approvalLabel } from '@/lib/approval';
+import { requestGroupIds } from '@/lib/orderLines';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -31,6 +32,11 @@ export default function RequestsPage() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCommodityGroup, setFilterCommodityGroup] = useState<number | 'all'>('all');
   const { data: commodityGroups } = useCommodityGroups();
+  /** Groups a request books lines under besides its main one (shown as "+N"). */
+  const otherGroupNames = (req: ProcurementRequestWithDetails): string[] =>
+    [...requestGroupIds(req)]
+      .filter((id) => id !== req.commodity_group_id)
+      .flatMap((id) => commodityGroups?.find((g) => g.id === id)?.name ?? []);
 
   useEffect(() => {
     const load = async () => {
@@ -62,7 +68,8 @@ export default function RequestsPage() {
 
   const filteredRequests = requests.filter((req) => {
     if (filterStatus !== 'all' && req.status !== filterStatus) return false;
-    if (filterCommodityGroup !== 'all' && req.commodity_group_id !== filterCommodityGroup)
+    // A request matches when any of its lines is booked under the group.
+    if (filterCommodityGroup !== 'all' && !requestGroupIds(req).has(filterCommodityGroup))
       return false;
     return true;
   });
@@ -208,6 +215,14 @@ export default function RequestsPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-ink/70">
                       {request.commodity_groups?.name || '-'}
+                      {(() => {
+                        const others = otherGroupNames(request);
+                        return others.length > 0 ? (
+                          <span className="ml-1 text-ink/45" title={`Also: ${others.join(', ')}`}>
+                            +{others.length}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span

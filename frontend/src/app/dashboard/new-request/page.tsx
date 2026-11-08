@@ -11,7 +11,14 @@ import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
 import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
-import { type Line, computeTotals, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
+import {
+  type Line,
+  computeTotals,
+  linesForSave,
+  missingGroupError,
+  normalizeLines,
+  primaryGroupId,
+} from '@/lib/orderLines';
 
 /** Everything a draft keeps (the PDF is stored separately as the draft's document). */
 interface DraftData {
@@ -22,7 +29,6 @@ interface DraftData {
   quoteNumber?: string;
   validUntil?: string;
   department: string;
-  commodityGroupId: number | null;
   orderLines: Line[];
   taxTotal: number;
   quotedGrandTotal: number | null;
@@ -50,7 +56,6 @@ export default function NewRequestPage() {
   const [extracted, setExtracted] = useState(false);
   const [validUntil, setValidUntil] = useState('');
   const [department, setDepartment] = useState('');
-  const [commodityGroupId, setCommodityGroupId] = useState<number | null>(null);
   const [orderLines, setOrderLines] = useState<Line[]>([]);
   const [taxTotal, setTaxTotal] = useState<number>(0);
   const [quotedGrandTotal, setQuotedGrandTotal] = useState<number | null>(null);
@@ -86,7 +91,7 @@ export default function NewRequestPage() {
     ),
   ];
   // Groups are booked per line; the request shows the one with the largest spend.
-  const primaryGroup = primaryGroupId(orderLines) ?? commodityGroupId;
+  const primaryGroup = primaryGroupId(orderLines);
   const primaryGroupLabel = (() => {
     const g = commodityGroups?.find((x) => x.id === primaryGroup);
     return g ? `${g.category} · ${g.name}` : null;
@@ -122,7 +127,6 @@ export default function NewRequestPage() {
           setQuoteNumber(data.quoteNumber ?? '');
           setValidUntil(data.validUntil ?? '');
           setDepartment(data.department ?? '');
-          setCommodityGroupId(data.commodityGroupId ?? null);
           setOrderLines(normalizeLines(data.orderLines ?? []));
           setTaxTotal(data.taxTotal ?? 0);
           setQuotedGrandTotal(data.quotedGrandTotal ?? null);
@@ -183,7 +187,7 @@ export default function NewRequestPage() {
   const fileUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
   const draftData: DraftData = {
-    requestorName, title, vendorName, vatId, quoteNumber, validUntil, department, commodityGroupId, orderLines,
+    requestorName, title, vendorName, vatId, quoteNumber, validUntil, department, orderLines,
     taxTotal, quotedGrandTotal, extractionWarnings, fieldSources, totalCost: totals.grand, extracted,
   };
 
@@ -195,7 +199,7 @@ export default function NewRequestPage() {
     const worthKeeping =
       !!file ||
       orderLines.length > 0 ||
-      !!(requestorName || department || title || vendorName || vatId || quoteNumber || validUntil || commodityGroupId || taxTotal);
+      !!(requestorName || department || title || vendorName || vatId || quoteNumber || validUntil || taxTotal);
     if (!worthKeeping) return;
     const t = setTimeout(async () => {
       setSaveState({ kind: 'saving' });
@@ -285,11 +289,6 @@ export default function NewRequestPage() {
       );
       setFieldSources(extracted.fieldSources ?? {});
 
-      // Set commodity group (now included in extraction)
-      if (extracted.commodityGroupId) {
-        setCommodityGroupId(extracted.commodityGroupId);
-      }
-
       // Show warnings for missing fields
       const missing = extractionResult.missingFields ?? [];
       if (missing.length > 0) {
@@ -318,15 +317,17 @@ export default function NewRequestPage() {
     setWarning('');
 
     // Validation with scroll to top on error
-    if (!primaryGroup) {
-      setError('Choose a commodity group on at least one order line');
+    const linesToSave = linesForSave(orderLines);
+    if (linesToSave.length === 0) {
+      setError('Please add at least one order line');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
-    const linesToSave = linesForSave(orderLines);
-    if (linesToSave.length === 0) {
-      setError('Please add at least one order line');
+    // Spend is booked per line, so every line that counts needs its own group.
+    const groupError = missingGroupError(linesToSave);
+    if (groupError) {
+      setError(groupError);
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }

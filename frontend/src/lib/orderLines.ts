@@ -6,6 +6,7 @@
  * - net = sum of active line totals; grand = net + tax.
  */
 import type { LineKind, OrderLineInput } from '@/lib/api';
+import type { ProcurementRequestWithDetails } from '@/types/database';
 
 export type Line = OrderLineInput & {
   key: string;
@@ -128,17 +129,74 @@ export function lineGroupId(line: Line, lines: Line[]): number | null {
   return parent?.commodityGroupId ?? null;
 }
 
-/** Request-level group = the one with the largest spend among active lines (server rule). */
-export function primaryGroupId(lines: Line[]): number | null {
+/** Spend per group: each active line's total booked under its effective group (no tax). */
+export function groupSpend(lines: Line[]): Map<number, number> {
   const spend = new Map<number, number>();
   for (const l of lines) {
     if (!isActive(l, lines)) continue;
     const g = lineGroupId(l, lines);
-    if (g) spend.set(g, (spend.get(g) ?? 0) + l.totalPrice);
+    if (g) spend.set(g, round2((spend.get(g) ?? 0) + l.totalPrice));
   }
+  return spend;
+}
+
+/** Request-level group = the one with the largest spend among active lines (server rule). */
+export function primaryGroupId(lines: Line[]): number | null {
+  const spend = groupSpend(lines);
   let best: number | null = null;
   for (const [g, v] of spend) if (best === null || v > (spend.get(best) ?? 0)) best = g;
   return best;
+}
+
+/** The save error when an active line has no group (same wording as the server), else null. */
+export function missingGroupError(lines: Line[]): string | null {
+  const missing = lines
+    .filter((l) => isActive(l, lines) && !lineGroupId(l, lines))
+    .map((l) => l.positionDescription.trim() || l.position || l.key);
+  return missing.length
+    ? `Every order line needs a commodity group (missing on: ${missing.join(', ')})`
+    : null;
+}
+
+/** Map stored lines (snake_case base + camelCase rich fields) to editor lines. */
+export const linesFromRequest = (req: ProcurementRequestWithDetails): Line[] =>
+  normalizeLines(
+    (req.order_lines || []).map((l) => ({
+      positionDescription: l.position_description,
+      unitPrice: l.unit_price,
+      amount: l.amount,
+      unit: l.unit,
+      totalPrice: l.total_price,
+      key: l.key,
+      parentKey: l.parentKey ?? null,
+      kind: l.kind ?? 'item',
+      position: l.position ?? null,
+      vendorItemNumber: l.vendorItemNumber ?? null,
+      listUnitPrice: l.listUnitPrice ?? null,
+      adjustmentPercent: l.adjustmentPercent ?? null,
+      sources: l.sources ?? [],
+      sourceText: l.sourceText ?? null,
+      articleId: l.articleId ?? null,
+      commodityGroupId: l.commodityGroupId ?? null,
+    })),
+  );
+
+/** Every group a request books spend under (plus its summary group, for old requests). */
+export function requestGroupIds(req: ProcurementRequestWithDetails): Set<number> {
+  const ids = new Set(groupSpend(linesFromRequest(req)).keys());
+  if (req.commodity_group_id) ids.add(req.commodity_group_id);
+  return ids;
+}
+
+/** Spend per group across requests, added up line by line. */
+export function spendByGroup(requests: ProcurementRequestWithDetails[]): Map<number, number> {
+  const total = new Map<number, number>();
+  for (const req of requests) {
+    for (const [g, v] of groupSpend(linesFromRequest(req))) {
+      total.set(g, round2((total.get(g) ?? 0) + v));
+    }
+  }
+  return total;
 }
 
 /** Items in order, each followed by its children; then whole-quote charges. */

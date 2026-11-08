@@ -13,31 +13,14 @@ import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
 import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
-import { type Line, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
+import {
+  type Line,
+  linesForSave,
+  linesFromRequest as toEditorLines,
+  missingGroupError,
+  primaryGroupId,
+} from '@/lib/orderLines';
 import { approvalLabel } from '@/lib/approval';
-
-/** Map stored lines (snake_case base + camelCase rich fields) to editor lines. */
-const toEditorLines = (req: ProcurementRequestWithDetails): Line[] =>
-  normalizeLines(
-    (req.order_lines || []).map((l) => ({
-      positionDescription: l.position_description,
-      unitPrice: l.unit_price,
-      amount: l.amount,
-      unit: l.unit,
-      totalPrice: l.total_price,
-      key: l.key,
-      parentKey: l.parentKey ?? null,
-      kind: l.kind ?? 'item',
-      position: l.position ?? null,
-      vendorItemNumber: l.vendorItemNumber ?? null,
-      listUnitPrice: l.listUnitPrice ?? null,
-      adjustmentPercent: l.adjustmentPercent ?? null,
-      sources: l.sources ?? [],
-      sourceText: l.sourceText ?? null,
-      articleId: l.articleId ?? null,
-      commodityGroupId: l.commodityGroupId ?? null,
-    })),
-  );
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -229,7 +212,13 @@ export default function RequestDetailPage() {
 
   const saveLines = async () => {
     if (!request) return;
-    setBusy(true); setError(''); setSuccess('');
+    setError(''); setSuccess('');
+    const groupError = missingGroupError(linesForSave(lines));
+    if (groupError) {
+      setError(groupError);
+      return;
+    }
+    setBusy(true);
     try {
       const wasApproved = request.approval_status === 'approved';
       const saved = await api.requests.update(id, updatePayload(headerFromRequest(), lines, taxTotal));

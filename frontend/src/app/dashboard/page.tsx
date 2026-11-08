@@ -6,6 +6,7 @@ import * as api from '@/lib/api';
 import { Button } from '@/components/base';
 import { PieChart, type PieChartData } from '@/components/PieChart';
 import type { CommodityGroup, ProcurementRequestWithDetails } from '@/types/database';
+import { spendByGroup } from '@/lib/orderLines';
 
 export default function DashboardPage() {
   const [requests, setRequests] = useState<ProcurementRequestWithDetails[]>([]);
@@ -54,58 +55,15 @@ export default function DashboardPage() {
     { name: 'Closed', value: closedRequests },
   ].filter((item) => item.value > 0);
 
-  // Prepare pie chart data for closed requests by commodity group
-  const closedRequestsData = requests.filter((r) => r.status === 'closed');
-  const closedCommodityGroupData: PieChartData[] = [];
-  
-  if (closedRequestsData.length > 0 && commodityGroups.length > 0) {
-    const groupTotals = new Map<number, { name: string; value: number }>();
-    
-    closedRequestsData.forEach((request) => {
-      if (request.commodity_group_id && request.total_cost) {
-        const group = commodityGroups.find((g) => g.id === request.commodity_group_id);
-        if (group) {
-          const existing = groupTotals.get(group.id);
-          if (existing) {
-            existing.value += request.total_cost;
-          } else {
-            groupTotals.set(group.id, {
-              name: group.name,
-              value: request.total_cost,
-            });
-          }
-        }
-      }
+  // Spend per commodity group, booked line by line: one request can span several
+  // groups. Line totals exclude tax, which isn't spend on any group.
+  const spendData = (reqs: ProcurementRequestWithDetails[]): PieChartData[] =>
+    [...spendByGroup(reqs)].flatMap(([id, value]) => {
+      const group = commodityGroups.find((g) => g.id === id);
+      return group && value > 0 ? [{ name: group.name, value }] : [];
     });
-    
-    closedCommodityGroupData.push(...groupTotals.values());
-  }
-
-  // Prepare pie chart data for ALL requests by commodity group
-  const allCommodityGroupData: PieChartData[] = [];
-  
-  if (requests.length > 0 && commodityGroups.length > 0) {
-    const groupTotals = new Map<number, { name: string; value: number }>();
-    
-    requests.forEach((request) => {
-      if (request.commodity_group_id && request.total_cost) {
-        const group = commodityGroups.find((g) => g.id === request.commodity_group_id);
-        if (group) {
-          const existing = groupTotals.get(group.id);
-          if (existing) {
-            existing.value += request.total_cost;
-          } else {
-            groupTotals.set(group.id, {
-              name: group.name,
-              value: request.total_cost,
-            });
-          }
-        }
-      }
-    });
-    
-    allCommodityGroupData.push(...groupTotals.values());
-  }
+  const closedCommodityGroupData = spendData(requests.filter((r) => r.status === 'closed'));
+  const allCommodityGroupData = spendData(requests);
 
   // Placeholder data for empty charts
   const placeholderStatusData: PieChartData[] = [
