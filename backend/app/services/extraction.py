@@ -217,7 +217,7 @@ Quote rows:
 Rules:
 - The vendor is the seller who issued the quote, never the recipient/customer.
 - vendor_tax_id is only the vendor's EIN / Tax ID. Never use a customer number, quote number or permit number; otherwise null.
-- department is the BUYER's department only, and only if the quote states one. Never use the seller's team or contact (e.g. an \"Apple Business Team\" on an Apple quote is not a department; use null unless the buyer's own department is stated). Never use the buyer company name.
+- department is the BUYER's department only, and only if the quote states one. Never use the seller's team or contact (e.g. an "Apple Business Team" on an Apple quote is not a department; use null unless the buyer's own department is stated). Never use the buyer company name.
 - Return every priced line in document order. Section headings get kind "heading".
 - Use the vendor's own position number in `position` (e.g. "3", "1.1a"), else null.
 - Lines labelled alternative or option are kind "alternative", with parent_position set to the position of the item they replace. Optional add-ons are kind "optional" (parent_position = the item they are an add-on to, or null).
@@ -279,9 +279,11 @@ def _line_numbers(ln: LlmLine) -> tuple[float, float, float]:
         total = _round(ln.quantity * unit_price)
     else:
         total = ln.total_price or 0.0
+    unit_price = unit_price or 0.0
     if ln.kind == "discount":
         total = -abs(total)
-    return unit_price or 0.0, ln.quantity or 0.0, total
+        unit_price = -abs(unit_price)
+    return unit_price, ln.quantity or 0.0, total
 
 
 def _normalise_line(ln: LlmLine) -> LlmLine:
@@ -298,9 +300,11 @@ def _normalise_line(ln: LlmLine) -> LlmLine:
         if has_adjusted_unit:
             if not ln.quantity:
                 updates["quantity"] = 1
-        elif not ln.quantity or not unit_price:
+        elif not ln.quantity:
             updates["quantity"] = 1
             updates["unit_price"] = ln.total_price
+        elif not unit_price:
+            updates["unit_price"] = _round(ln.total_price / ln.quantity)
     return ln.model_copy(update=updates) if updates else ln
 
 
