@@ -472,6 +472,33 @@ def test_quantity_kept_when_unit_price_missing():
     assert not any("quantity x unit price" in x for x in w)
 
 
+def test_inexact_split_keeps_stated_total():
+    l = line(position="1", quantity=3, unit_price=None, total_price=100.0)
+    ln = conv(quote([l]))[0].order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (1, 100.0, 100.0)
+
+
+def test_inexact_split_discount_keeps_stated_total():
+    l = line(position="1", kind="discount", quantity=3, unit_price=None,
+             total_price=-100.0)
+    ln = conv(quote([l]))[0].order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (1, -100.0, -100.0)
+
+
+def test_total_only_negative_discount():
+    d = line(position="2", kind="discount", quantity=None, unit_price=None,
+             total_price=-10.0)
+    ln = conv(quote([d]))[0].order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (1, -10.0, -10.0)
+
+
+def test_discount_with_list_and_adjustment():
+    d = line(position="2", kind="discount", quantity=5, unit_price=None,
+             list_unit_price=10.0, adjustment_percent=-10.0, total_price=-45.0)
+    ln = conv(quote([d]))[0].order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (5, -9.0, -45.0)
+
+
 def test_adjusted_line_not_overwritten_by_total():
     l = line(position="1", quantity=5, unit_price=None, list_unit_price=10.0,
              adjustment_percent=-10.0, total_price=45.0)

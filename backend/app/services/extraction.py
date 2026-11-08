@@ -219,7 +219,7 @@ Rules:
 - vendor_tax_id is only the vendor's EIN / Tax ID. Never use a customer number, quote number or permit number; otherwise null.
 - department is the BUYER's department only, and only if the quote states one. Never use the seller's team or contact (e.g. an "Apple Business Team" on an Apple quote is not a department; use null unless the buyer's own department is stated). Never use the buyer company name.
 - Return every priced line in document order. Section headings get kind "heading".
-- description is the position's short name as printed (e.g. for Hollis 1.1: Moss panel "70:30" with "askLio" lettering), at most about 120 characters. Never the whole specification paragraph; drop the spec details.
+- description is the position's short name as printed (e.g. Moss panel "70:30" with "askLio" lettering), at most about 120 characters. Never the whole specification paragraph; drop the spec details.
 - Use the vendor's own position number in `position` (e.g. "3", "1.1a"), else null.
 - Lines labelled alternative or option are kind "alternative", with parent_position set to the position of the item they replace. Optional add-ons are kind "optional" (parent_position = the item they are an add-on to, or null).
 - Discounts, surcharges, shipping and fees that the quote ties to one position get that parent_position; otherwise parent_position is null (applies to the whole quote).
@@ -305,7 +305,12 @@ def _normalise_line(ln: LlmLine) -> LlmLine:
             updates["quantity"] = 1
             updates["unit_price"] = ln.total_price
         elif not unit_price:
-            updates["unit_price"] = _round(ln.total_price / ln.quantity)
+            derived = _round(ln.total_price / ln.quantity)
+            if _round(ln.quantity * derived) == _round(ln.total_price):
+                updates["unit_price"] = derived
+            else:  # inexact split: keep the stated total
+                updates["quantity"] = 1
+                updates["unit_price"] = ln.total_price
     return ln.model_copy(update=updates) if updates else ln
 
 
