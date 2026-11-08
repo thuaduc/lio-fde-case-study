@@ -62,10 +62,7 @@ export default function DashboardPage() {
       const group = commodityGroups.find((g) => g.id === id);
       return group && value > 0 ? [{ name: group.name, value }] : [];
     });
-  // Rejection closes a request, but rejected requests were never spent.
-  const closedCommodityGroupData = spendData(
-    requests.filter((r) => r.status === 'closed' && r.approval_status !== 'rejected'),
-  );
+  const closedCommodityGroupData = spendData(requests.filter((r) => r.status === 'closed'));
   const allCommodityGroupData = spendData(requests);
 
   // Placeholder data for empty charts
