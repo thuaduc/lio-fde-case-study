@@ -76,7 +76,12 @@ def _upsert_embeddings(db: Session, rows: list[dict]) -> None:
     if not rows:
         return
     dialect = db.get_bind().dialect.name
-    insert = (postgresql if dialect == "postgresql" else sqlite).insert
+    if dialect == "postgresql":
+        insert = postgresql.insert
+    elif dialect == "sqlite":
+        insert = sqlite.insert
+    else:
+        raise NotImplementedError(dialect)
     stmt = insert(ArticleEmbedding).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=["text_hash"],
@@ -105,18 +110,18 @@ def ensure_embeddings(db: Session, texts: list[str]) -> dict[str, list[float]]:
 
     missing = [h for h in by_hash if h not in cached]
     if missing:
-        rows_out: list[dict] = []
         client = extraction._get_client()
         for i in range(0, len(missing), EMBEDDING_BATCH):
             chunk = missing[i : i + EMBEDDING_BATCH]
             response = client.embeddings.create(
                 model=model, input=[normalize(by_hash[h]) for h in chunk]
             )
+            rows_out: list[dict] = []
             for h, item in zip(chunk, response.data, strict=True):
                 vector = [float(x) for x in item.embedding]
                 cached[h] = vector
                 rows_out.append({"text_hash": h, "model": model, "embedding": vector})
-        _upsert_embeddings(db, rows_out)
+            _upsert_embeddings(db, rows_out)
         db.commit()
 
     return {t: cached[text_hash(t)] for t in texts}

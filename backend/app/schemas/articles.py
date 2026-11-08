@@ -32,15 +32,18 @@ class ArticlePage(BaseModel):
 
 MAX_SUGGESTION_LINES = 100
 MAX_DESCRIPTION_LENGTH = 500
+MAX_SHORT_FIELD_LENGTH = 100
 
 
 class SuggestionLineIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     description: str = Field(max_length=MAX_DESCRIPTION_LENGTH)
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=MAX_SHORT_FIELD_LENGTH)
     unit_price: float | None = Field(default=None, alias="unitPrice")
-    vendor_item_number: str | None = Field(default=None, alias="vendorItemNumber")
+    vendor_item_number: str | None = Field(
+        default=None, alias="vendorItemNumber", max_length=MAX_SHORT_FIELD_LENGTH
+    )
 
 
 class SuggestionsRequest(BaseModel):

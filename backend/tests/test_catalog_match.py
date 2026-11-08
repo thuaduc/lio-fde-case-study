@@ -296,7 +296,7 @@ def test_embedding_model_mismatch_counts_as_missing(client, monkeypatch):
         row.model = "old-model"
         db.commit()
         cm.ensure_embeddings(db, [MOSS])
-        db.expire_all()
+        db.expire_all()  # the upsert bypasses the ORM identity map; drop the stale row
         assert len(fake.embedding_calls) == 2
         assert db.get(ArticleEmbedding, cm.text_hash(MOSS)).model == settings.openai_embedding_model
 
@@ -435,22 +435,44 @@ def test_empty_lines_and_blank_description(client, org, monkeypatch):
     assert fake.chat_calls == []
 
 
-def test_request_caps_return_422(client, org):
+def test_request_caps_return_422(client, org, monkeypatch):
     headers, _ = org
-    ok = {"description": "x" * 500}
-    r = client.post("/articles/suggestions", json={"lines": [ok]}, headers=headers)
-    assert r.status_code == 200
-    r = client.post(
-        "/articles/suggestions", json={"lines": [{"description": "x" * 501}]}, headers=headers
-    )
-    assert r.status_code == 422
-    r = client.post(
-        "/articles/suggestions", json={"lines": [{"description": "a"}] * 101}, headers=headers
-    )
-    assert r.status_code == 422
+    use(monkeypatch, FakeClient())
+
+    def post(lines):
+        return client.post("/articles/suggestions", json={"lines": lines}, headers=headers)
+
+    assert post([{"description": "x" * 500}]).status_code == 200
+    assert post([{"description": "x" * 501}]).status_code == 422
+    assert post([{"description": "a"}] * 100).status_code == 200
+    assert post([{"description": "a"}] * 101).status_code == 422
+    assert post([{"description": "a", "unit": "u" * 100, "vendorItemNumber": "v" * 100}]).status_code == 200
+    assert post([{"description": "a", "unit": "u" * 101}]).status_code == 422
+    assert post([{"description": "a", "vendorItemNumber": "v" * 101}]).status_code == 422
 
 
-@pytest.mark.parametrize("old_model", ["text-embedding-3-small", "old-model"])
+def test_upsert_statement_on_postgresql():
+    from sqlalchemy.dialects import postgresql
+
+    stmt = postgresql.insert(ArticleEmbedding).values(
+        [{"text_hash": "h", "model": "m", "embedding": [1.0]}]
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["text_hash"],
+        set_={"model": stmt.excluded.model, "embedding": stmt.excluded.embedding},
+    )
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT (text_hash) DO UPDATE" in sql
+    assert "model = excluded.model" in sql and "embedding = excluded.embedding" in sql
+
+
+def test_upsert_rejects_unknown_dialect():
+    fake_db = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="mysql")))
+    with pytest.raises(NotImplementedError):
+        cm._upsert_embeddings(fake_db, [{"text_hash": "h", "model": "m", "embedding": [1.0]}])
+
+
+@pytest.mark.parametrize("old_model", [settings.openai_embedding_model, "old-model"])
 def test_upsert_tolerates_existing_row(client, monkeypatch, old_model):
     """A row inserted by a concurrent request (or a stale model) is overwritten."""
     use(monkeypatch, FakeClient())
