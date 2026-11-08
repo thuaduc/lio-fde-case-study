@@ -233,7 +233,6 @@ REQ = {
     "requestorName": "Rita",
     "titleShortDescription": "Quote",
     "vendorName": "Acme",
-    "commodityGroupId": 31,
     "orderLines": [
         {
             "positionDescription": "L",
@@ -247,10 +246,16 @@ REQ = {
 }
 
 
+def req_for(client, auth, **kw):
+    """REQ with one of the caller's org's commodity groups (groups are per org)."""
+    gid = client.get("/commodity-groups", headers=auth).json()[0]["id"]
+    return {**REQ, "commodityGroupId": gid, **kw}
+
+
 def test_create_from_draft_moves_pdf_and_deletes_draft(client, auth):
     did = mk(client, auth, {"title": "T"})["id"]
     client.put(f"/drafts/{did}/document", files=pdf("moved.pdf"), headers=auth)
-    r = client.post("/requests", json={**REQ, "draftId": did}, headers=auth)
+    r = client.post("/requests", json=req_for(client, auth, draftId=did), headers=auth)
     assert r.status_code == 201, r.text
     rid = r.json()["id"]
     assert client.get(f"/drafts/{did}", headers=auth).status_code == 404
@@ -270,7 +275,7 @@ def test_create_from_draft_moves_pdf_and_deletes_draft(client, auth):
 
 def test_create_from_draft_without_document(client, auth):
     did = mk(client, auth)["id"]
-    r = client.post("/requests", json={**REQ, "draftId": did}, headers=auth)
+    r = client.post("/requests", json=req_for(client, auth, draftId=did), headers=auth)
     assert r.status_code == 201
     assert client.get(f"/drafts/{did}", headers=auth).status_code == 404
     assert client.get(f"/requests/{r.json()['id']}/document", headers=auth).status_code == 404
@@ -281,7 +286,7 @@ def test_create_with_foreign_or_missing_draft_is_422(client, auth, teammate, out
     other_org = mk(client, outsider)["id"]
     before = len(client.get("/requests", headers=auth).json())
     for did in (foreign, other_org, str(uuid.uuid4())):
-        r = client.post("/requests", json={**REQ, "draftId": did}, headers=auth)
+        r = client.post("/requests", json=req_for(client, auth, draftId=did), headers=auth)
         assert r.status_code == 422, r.text
         assert r.json()["detail"] == "Draft not found"
     assert len(client.get("/requests", headers=auth).json()) == before

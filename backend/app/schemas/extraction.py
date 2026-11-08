@@ -42,6 +42,8 @@ class ExtractedLine(OrderLineData):
     # Filled by Task 3 (resolve_sources).
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, alias="sourceText")
+    # The org's commodity group for this line (adjustments inherit their parent's).
+    commodity_group_id: int | None = Field(default=None, alias="commodityGroupId")
 
 
 class ExtractedVendorData(BaseModel):
@@ -95,6 +97,8 @@ class LlmLine(BaseModel):
     unit_price: float | None
     total_price: float | None
     source_rows: list[str]
+    # Commodity group id from the listed groups, or null if uncertain.
+    commodity_group_id: int | None
 
 
 class LlmFieldSources(BaseModel):

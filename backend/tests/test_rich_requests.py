@@ -91,18 +91,24 @@ def payload(lines, **kw):
         "requestorName": "Rita",
         "titleShortDescription": "Quote",
         "vendorName": "Acme",
-        "commodityGroupId": 31,
         "orderLines": lines,
     }
     base.update(kw)
     return base
 
 
+def org_group(client, auth):
+    """One of the caller's org's commodity groups (groups are per org)."""
+    return client.get("/commodity-groups", headers=auth).json()[0]["id"]
+
+
 def create(client, auth, lines, **kw):
+    kw.setdefault("commodityGroupId", org_group(client, auth))
     return client.post("/requests", json=payload(lines, **kw), headers=auth)
 
 
 def put(client, auth, rid, lines, **kw):
+    kw.setdefault("commodityGroupId", org_group(client, auth))
     body = payload(lines, **kw)
     body["title"] = body.pop("titleShortDescription")
     return client.put(f"/requests/{rid}", json=body, headers=auth)

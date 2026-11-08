@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_optional_membership
 from app.db.session import get_db
+from app.models import OrganizationMember
 from app.schemas.extraction import ExtractionRequest, ExtractionResponse
 from app.routers.pdf import MAX_PDF_BYTES
 from app.services.extraction import extract_from_pdf, extract_vendor_data
@@ -12,21 +13,33 @@ from app.services.pdf_layout import is_pdf
 router = APIRouter(prefix="/extraction", tags=["extraction"])
 
 
-@router.post("", response_model=ExtractionResponse, response_model_by_alias=True,
-             dependencies=[Depends(get_current_user)])
-def extract(payload: ExtractionRequest, db: Session = Depends(get_db)) -> ExtractionResponse:
+def _org_id(membership: OrganizationMember | None):
+    # Classification uses the caller's org's groups; without an org there are
+    # none and extraction reports that in its envelope.
+    return membership.organization_id if membership is not None else None
+
+
+@router.post("", response_model=ExtractionResponse, response_model_by_alias=True)
+def extract(
+    payload: ExtractionRequest,
+    membership: OrganizationMember | None = Depends(get_optional_membership),
+    db: Session = Depends(get_db),
+) -> ExtractionResponse:
     """Extract structured vendor data from PDF text via OpenAI.
 
     Returns ``{success, data?, error?, missingFields?}`` — the same envelope the
     original server action produced (errors are part of the payload, not HTTP
     errors, so the UI can show partial-extraction warnings).
     """
-    return extract_vendor_data(payload.text, db)
+    return extract_vendor_data(payload.text, db, _org_id(membership))
 
 
-@router.post("/pdf", response_model=ExtractionResponse, response_model_by_alias=True,
-             dependencies=[Depends(get_current_user)])
-async def extract_pdf(file: UploadFile, db: Session = Depends(get_db)) -> ExtractionResponse:
+@router.post("/pdf", response_model=ExtractionResponse, response_model_by_alias=True)
+async def extract_pdf(
+    file: UploadFile,
+    membership: OrganizationMember | None = Depends(get_optional_membership),
+    db: Session = Depends(get_db),
+) -> ExtractionResponse:
     """Extract structured quote lines (with kinds and links) straight from a PDF."""
     pdf_bytes = await file.read()
     if len(pdf_bytes) > MAX_PDF_BYTES:
@@ -40,4 +53,6 @@ async def extract_pdf(file: UploadFile, db: Session = Depends(get_db)) -> Extrac
         )
     # Blocking work (pdfplumber + sync OpenAI call): keep it off the event loop.
     # The Session is created per request and only used inside this one thread.
-    return await run_in_threadpool(extract_from_pdf, pdf_bytes, db)
+    return await run_in_threadpool(
+        extract_from_pdf, pdf_bytes, db, _org_id(membership)
+    )

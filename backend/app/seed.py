@@ -17,6 +17,7 @@ from app.data.articles import ARTICLES
 from app.data.commodity_groups import COMMODITY_GROUPS
 from app.data.suppliers import SUPPLIERS
 from app.db.session import SessionLocal
+from app.services.commodity_groups import copy_templates
 from app.models import (
     Article,
     CommodityGroup,
@@ -53,7 +54,7 @@ ORG_ACCOUNTS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
 
 
 def seed_commodity_groups(db: Session) -> int:
-    """Insert commodity groups that aren't already present (keyed by id)."""
+    """Insert the global template groups that aren't present (keyed by id)."""
     existing = set(db.scalars(select(CommodityGroup.id)))
     new = [
         CommodityGroup(id=cg_id, category=category, name=name)
@@ -62,6 +63,73 @@ def seed_commodity_groups(db: Session) -> int:
     ]
     db.add_all(new)
     return len(new)
+
+
+def seed_org_commodity_groups(db: Session) -> int:
+    """Give every seeded org its copy of the base templates (idempotent)."""
+    db.flush()  # templates added above must be visible to the copy
+    added = 0
+    for _name, slug, _accounts in ORG_ACCOUNTS:
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is not None:
+            added += copy_templates(db, org.id)
+    return added
+
+
+# Acme's booking rules (customer brief, task 3), as editable seed data:
+# (category, name, description). The description is only filled in when the
+# group has none, so an admin's edits are never overwritten.
+ACME_BOOKING_GROUPS: list[tuple[str, str, str]] = [
+    (
+        "Facility Management",
+        "Electrical Engineering",
+        "Electrical installations, components and wiring material. Cable ties "
+        "always have to be booked under Electrical Engineering.",
+    ),
+    (
+        "Information Technology",
+        "IT Hardware",
+        "Computer hardware, peripherals and printer supplies. Printer toner "
+        "always has to be booked under IT Hardware.",
+    ),
+    (
+        "Office & Administration",
+        "Office Supplies",
+        "Office consumables and everyday office needs. Small software "
+        "subscriptions always have to be booked under Office Supplies.",
+    ),
+]
+
+
+def seed_acme_booking_groups(db: Session) -> int:
+    """Add Acme's booking-rule groups / descriptions; returns rows changed."""
+    org = db.scalar(select(Organization).where(Organization.slug == "acme"))
+    if org is None:
+        return 0
+    db.flush()
+    changed = 0
+    for category, name, description in ACME_BOOKING_GROUPS:
+        group = db.scalar(
+            select(CommodityGroup).where(
+                CommodityGroup.organization_id == org.id,
+                CommodityGroup.category == category,
+                CommodityGroup.name == name,
+            )
+        )
+        if group is None:
+            db.add(
+                CommodityGroup(
+                    organization_id=org.id,
+                    category=category,
+                    name=name,
+                    description=description,
+                )
+            )
+            changed += 1
+        elif group.description is None:
+            group.description = description
+            changed += 1
+    return changed
 
 
 def seed_suppliers(db: Session, organization_id: uuid.UUID) -> int:
@@ -195,6 +263,9 @@ def seed(db: Session) -> dict[str, int]:
     dev_org_id = dev_org.id if dev_org else None
     counts = {
         "commodity_groups": seed_commodity_groups(db),
+        # Org copies need the templates above and the orgs created earlier.
+        "org_commodity_groups": seed_org_commodity_groups(db),
+        "acme_booking_groups": seed_acme_booking_groups(db),
         # Master data belongs to Acme; skip if that org somehow isn't seeded.
         "suppliers": seed_suppliers(db, dev_org_id) if dev_org_id else 0,
         # Articles reference suppliers by name, so this must run after suppliers.

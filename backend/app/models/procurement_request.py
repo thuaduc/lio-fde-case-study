@@ -135,6 +135,11 @@ class OrderLine(Base, CreatedAtMixin):
     article_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), nullable=True
     )
+    # Per-line commodity group (migration 0010); the request's own
+    # commodity_group_id is the primary group computed from these.
+    commodity_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("commodity_groups.id", ondelete="SET NULL"), nullable=True
+    )
 
     request: Mapped["ProcurementRequest"] = relationship(back_populates="order_lines")
 

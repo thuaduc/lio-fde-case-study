@@ -1,11 +1,11 @@
 import json
 import logging
 import re
+import uuid
 from collections import Counter
 
 import openai
 from openai import OpenAI
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -17,7 +17,8 @@ from app.schemas.extraction import (
     LlmLine,
     LlmQuote,
 )
-from app.services.line_links import active_keys
+from app.services.commodity_groups import active_groups
+from app.services.line_links import active_keys, inherited_groups, primary_group
 from app.services.pdf_layout import (
     Box,
     PdfLayout,
@@ -34,6 +35,21 @@ SYSTEM_PROMPT = (
     "from US business documents and classify into the appropriate commodity "
     "group based on the full context of the offer."
 )
+
+
+BOOKING_RULE = (
+    "Group descriptions are this organization's booking rules. When an item "
+    "matches a description, use that group, even if another group's name looks "
+    "more specific."
+)
+
+
+def format_groups(groups: list[CommodityGroup]) -> str:
+    """One ``ID | Category | Name | Description`` row per group."""
+    return "\n".join(
+        f"{g.id} | {g.category} | {g.name} | {g.description or ''}".rstrip()
+        for g in groups
+    )
 
 
 def _build_prompt(pdf_text: str, commodity_groups_list: str) -> str:
@@ -56,8 +72,10 @@ Please extract the following information:
 6. Total Cost (Grand Total/Total Cost/Total Offer Cost)
 7. Commodity Group Classification - Select the SINGLE most appropriate commodity group from the list below
 
-Available Commodity Groups (ID | Category | Name):
+Available Commodity Groups (ID | Category | Name | Description):
 {commodity_groups_list}
+
+{BOOKING_RULE}
 
 IMPORTANT INSTRUCTIONS:
 - For the title, create a SHORT (2-5 words) description based on the main items being purchased
@@ -65,10 +83,7 @@ IMPORTANT INSTRUCTIONS:
 - For unit prices and totals, extract only the numeric value (remove currency symbols)
 - For the unit field, write out abbreviations in plain English (e.g., "ea." -> "pieces", "lic." -> "licenses")
 - Be careful with US number formatting (e.g., "1,438.00" = 1438.00)
-- For classification, consider the PRIMARY nature and purpose of the items:
-  * Branded office decor/furniture → Office Equipment (15)
-  * Traditional promotional items (brochures, giveaways, banners) → Promotional Materials (43)
-  * Software/IT products → Software (31) or IT Services (30)
+- For classification, consider the PRIMARY nature and purpose of the items and use only an ID from the list above
   * If genuinely uncertain, set commodityGroupId to null
 
 Return ONLY valid JSON in this exact format (no markdown, no code blocks):
@@ -87,8 +102,8 @@ Return ONLY valid JSON in this exact format (no markdown, no code blocks):
     }}
   ],
   "totalCost": 1500.00,
-  "commodityGroupId": 15,
-  "commodityGroupName": "Office Equipment"
+  "commodityGroupId": 123,
+  "commodityGroupName": "Name of the chosen group"
 }}"""
 
 
@@ -103,10 +118,13 @@ def _strip_markdown_fences(content: str) -> str:
     return cleaned
 
 
-def extract_vendor_data(pdf_text: str, db: Session) -> ExtractionResponse:
+def extract_vendor_data(
+    pdf_text: str, db: Session, organization_id: uuid.UUID | None
+) -> ExtractionResponse:
     """Extract vendor data and classify commodity group in one AI call.
 
-    Port of ``src/actions/extraction.ts`` — same prompt, model and validation.
+    Port of ``src/actions/extraction.ts`` — same model and validation; the
+    prompt lists the org's active groups with their booking rules.
     """
     if not pdf_text or not pdf_text.strip():
         return ExtractionResponse(success=False, error="No text provided for extraction")
@@ -117,24 +135,19 @@ def extract_vendor_data(pdf_text: str, db: Session) -> ExtractionResponse:
             error="OPENAI_API_KEY is not configured on the server",
         )
 
-    commodity_groups = list(
-        db.scalars(select(CommodityGroup).order_by(CommodityGroup.id))
-    )
+    commodity_groups = active_groups(db, organization_id)
     if not commodity_groups:
         return ExtractionResponse(
             success=False,
             error="Failed to load commodity groups for classification",
         )
 
-    # Give the model the full commodity catalog so it has complete context to
-    # pick the most accurate match in a single pass.
-    commodity_groups_list = "\n".join(
-        f"{g.id} | {g.category} | {g.name}" for g in commodity_groups
-    )
+    # Give the model the org's full active catalog so it has complete context
+    # to pick the most accurate match in a single pass.
+    commodity_groups_list = format_groups(commodity_groups)
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
-        response = client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model=settings.openai_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -231,10 +244,14 @@ Rules:
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
 - field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 94 1985704' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
-- commodity_group_id: choose the SINGLE most appropriate group below, or null if genuinely uncertain.
+- Classify every line: its commodity_group_id is the SINGLE most appropriate group below for that line, or null if genuinely uncertain. Discounts, surcharges, shipping and fees tied to a position take that position's group.
+- commodity_group_id (quote level): the group of the largest share of the spend, or null if genuinely uncertain.
+- Use only IDs from the list below.
 
-Available Commodity Groups (ID | Category | Name):
-{commodity_groups_list}"""
+Available Commodity Groups (ID | Category | Name | Description):
+{commodity_groups_list}
+
+{BOOKING_RULE}"""
 
 
 def _get_client() -> OpenAI:
@@ -523,8 +540,19 @@ def to_extracted(
                 adjustment_percent=ln.adjustment_percent,
                 sources=boxes,
                 source_text=source_text,
+                # An id the org doesn't have (or archived) is dropped.
+                commodity_group_id=(
+                    ln.commodity_group_id if ln.commodity_group_id in groups else None
+                ),
             )
         )
+
+    # Adjustments tied to a line always book to that line's group.
+    out = [
+        ln if ln.commodity_group_id == gid
+        else ln.model_copy(update={"commodity_group_id": gid})
+        for ln, gid in zip(out, inherited_groups(out, override=True))
+    ]
 
     for charge in q.unpriced_charges:
         warnings.append(f"Quote mentions a charge without an amount: {charge}")
@@ -539,7 +567,11 @@ def to_extracted(
 
     warnings.extend(reconcile(out, q.net_total, tax, q.grand_total))
 
-    group_id = q.commodity_group_id if q.commodity_group_id in groups else None
+    # Same rule as on save: the primary group is the largest active spend,
+    # falling back to the model's quote-level choice.
+    group_id = primary_group(out)
+    if group_id is None and q.commodity_group_id in groups:
+        group_id = q.commodity_group_id
     data = ExtractedVendorData(
         title=q.title or "",
         vendor_name=q.vendor_name or "",
@@ -591,7 +623,9 @@ def _fail(error: str) -> ExtractionResponse:
     return ExtractionResponse(success=False, error=error)
 
 
-def extract_from_pdf(pdf_bytes: bytes, db: Session) -> ExtractionResponse:
+def extract_from_pdf(
+    pdf_bytes: bytes, db: Session, organization_id: uuid.UUID | None
+) -> ExtractionResponse:
     """PDF -> layout rows -> one structured model call -> structured lines."""
     try:
         layout = extract_layout(pdf_bytes)
@@ -604,13 +638,11 @@ def extract_from_pdf(pdf_bytes: bytes, db: Session) -> ExtractionResponse:
     if not settings.openai_api_key:
         return _fail("OPENAI_API_KEY is not configured on the server")
 
-    commodity_groups = list(
-        db.scalars(select(CommodityGroup).order_by(CommodityGroup.id))
-    )
+    commodity_groups = active_groups(db, organization_id)
     if not commodity_groups:
         return _fail("Failed to load commodity groups for classification")
     groups = {g.id: g.name for g in commodity_groups}
-    groups_list = "\n".join(f"{g.id} | {g.category} | {g.name}" for g in commodity_groups)
+    groups_list = format_groups(commodity_groups)
 
     kwargs: dict = dict(
         model=settings.openai_model,

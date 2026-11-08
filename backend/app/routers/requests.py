@@ -28,7 +28,12 @@ from app.schemas.requests import (
     StatusUpdate,
 )
 
-from app.services.line_links import ADJUSTMENTS, active_keys
+from app.services.line_links import (
+    ADJUSTMENTS,
+    active_keys,
+    inherited_groups,
+    primary_group,
+)
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -79,12 +84,68 @@ def _get_org_request(
     return request
 
 
-def _validate_commodity_group(db: Session, commodity_group_id: int) -> None:
-    if db.get(CommodityGroup, commodity_group_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unknown commodity group id: {commodity_group_id}",
-        )
+def _validate_commodity_group(
+    db: Session,
+    organization_id: uuid.UUID,
+    commodity_group_id: int,
+    current: int | None = None,
+) -> None:
+    """The group must be the caller's org's and active. An archived group is
+    accepted only when it is ``current`` (the value already stored)."""
+    group = db.get(CommodityGroup, commodity_group_id)
+    if group is None or group.organization_id != organization_id:
+        raise _unprocessable(f"Unknown commodity group id: {commodity_group_id}")
+    if group.archived_at is not None and commodity_group_id != current:
+        raise _unprocessable(f"Commodity group {group.name!r} is archived")
+
+
+def _assign_groups(
+    db: Session,
+    organization_id: uuid.UUID,
+    lines: list[OrderLineIn],
+    requested_group: int | None,
+    request: ProcurementRequest | None = None,
+) -> tuple[list[OrderLineIn], int]:
+    """Validate and complete the line groups; return them with the primary group.
+
+    - On update, a line that doesn't send ``commodityGroupId`` (an older
+      client) keeps the stored group of the line with the same key.
+    - Line groups and the request group must be the org's and active; a value
+      already stored on the same line / request may stay even if archived.
+    - Adjustments with a parent and no group take the parent's group.
+    - The primary group is the largest active spend; without any line group
+      the client's ``commodityGroupId`` is used, and one of the two is required.
+    """
+    stored = (
+        {row.line_key: row.commodity_group_id for row in request.order_lines}
+        if request is not None
+        else {}
+    )
+    lines = [
+        ln if "commodity_group_id" in ln.model_fields_set or ln.key not in stored
+        else ln.model_copy(update={"commodity_group_id": stored[ln.key]})
+        for ln in lines
+    ]
+    for ln in lines:
+        if ln.commodity_group_id is not None:
+            _validate_commodity_group(
+                db, organization_id, ln.commodity_group_id, stored.get(ln.key)
+            )
+    lines = [
+        ln if ln.commodity_group_id == gid
+        else ln.model_copy(update={"commodity_group_id": gid})
+        for ln, gid in zip(lines, inherited_groups(lines, override=False))
+    ]
+
+    current = request.commodity_group_id if request is not None else None
+    if requested_group is not None:
+        _validate_commodity_group(db, organization_id, requested_group, current)
+    group_id = primary_group(lines)
+    if group_id is None:
+        group_id = requested_group
+    if group_id is None:
+        raise _unprocessable("A commodity group is required")
+    return lines, group_id
 
 
 def _enforce_required_fields(
@@ -186,6 +247,7 @@ def _order_lines_signature(lines) -> list[tuple]:
             _json_sources(line.sources),
             line.source_text,
             str(line.article_id) if line.article_id else None,
+            line.commodity_group_id,
         )
         for line in lines
     ]
@@ -211,6 +273,7 @@ class _StoredLine:
             sources=row.sources,
             source_text=row.source_text,
             article_id=row.article_id,
+            commodity_group_id=row.commodity_group_id,
         )
 
 
@@ -325,6 +388,7 @@ def _build_lines(lines: list[OrderLineIn]) -> list[OrderLine]:
             sources=[b.model_dump() for b in line.sources],
             source_text=line.source_text,
             article_id=line.article_id,
+            commodity_group_id=line.commodity_group_id,
         )
         for index, line in enumerate(lines)
     ]
@@ -336,6 +400,7 @@ def _changed_fields(
     lines: list[OrderLineIn],
     grand_total: float,
     tax_total: float | None,
+    commodity_group_id: int,
 ) -> list[str]:
     """Return the field keys whose value differs between the request and payload."""
     changed: list[str] = []
@@ -347,7 +412,7 @@ def _changed_fields(
         changed.append("vendor_name")
     if (request.vat_id or "") != (payload.vat_id or ""):
         changed.append("vat_id")
-    if request.commodity_group_id != payload.commodity_group_id:
+    if request.commodity_group_id != commodity_group_id:
         changed.append("commodity_group_id")
     if round(float(request.total_cost or 0), 2) != round(grand_total, 2):
         changed.append("total_cost")
@@ -405,10 +470,13 @@ def create_request(
         draft = get_own_draft(db, payload.draft_id, membership, light=False)
         if draft is None:
             raise _unprocessable("Draft not found")
-    _validate_commodity_group(db, payload.commodity_group_id)
     _enforce_required_fields(db, membership.organization_id, payload)
     lines = _prepare_lines(payload.order_lines)
     _validate_articles(db, membership.organization_id, lines)
+    # The primary group comes first: everything below works with it.
+    lines, group_id = _assign_groups(
+        db, membership.organization_id, lines, payload.commodity_group_id
+    )
     net_total, grand_total = compute_totals(lines, payload.tax_total)
 
     # Vendor fields are already cleaned up during extraction, so we can persist
@@ -419,7 +487,7 @@ def create_request(
         title=payload.title,
         vendor_name=payload.vendor_name,
         vat_id=payload.vat_id,
-        commodity_group_id=payload.commodity_group_id,
+        commodity_group_id=group_id,
         total_cost=grand_total,
         net_total=net_total,
         tax_total=payload.tax_total,
@@ -464,11 +532,14 @@ def update_request(
     db: Session = Depends(get_db),
 ) -> RequestOut:
     request = _get_org_request(db, request_id, membership.organization_id)
-    _validate_commodity_group(db, payload.commodity_group_id)
     _enforce_required_fields(db, membership.organization_id, payload)
 
     lines = _prepare_lines(payload.order_lines)
     _validate_articles(db, membership.organization_id, lines)
+    # The primary group comes first: change detection below compares it.
+    lines, group_id = _assign_groups(
+        db, membership.organization_id, lines, payload.commodity_group_id, request
+    )
     sent = payload.model_fields_set
     # tax_total is never recalculated: keep the stored value unless the client sends one.
     tax_total = payload.tax_total if "tax_total" in sent else (
@@ -484,7 +555,9 @@ def update_request(
             detail="Order lines can only be edited while the request is open.",
         )
 
-    changed = _changed_fields(request, payload, lines, grand_total, tax_total)
+    changed = _changed_fields(
+        request, payload, lines, grand_total, tax_total, group_id
+    )
 
     # A changed grand total re-evaluates the approval: below the org's
     # threshold it is auto-approved, otherwise an earlier approval is reset.
@@ -505,7 +578,7 @@ def update_request(
     request.title = payload.title
     request.vendor_name = payload.vendor_name
     request.vat_id = payload.vat_id
-    request.commodity_group_id = payload.commodity_group_id
+    request.commodity_group_id = group_id
     request.total_cost = grand_total
     request.net_total = net_total
     request.tax_total = tax_total

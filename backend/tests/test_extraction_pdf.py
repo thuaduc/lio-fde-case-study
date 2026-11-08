@@ -1,5 +1,6 @@
 """Rich PDF extraction: LLM output -> structured lines. No network: the OpenAI
 client is replaced by a fake that records calls and returns canned quotes."""
+import uuid
 from types import SimpleNamespace
 
 import openai
@@ -9,11 +10,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, get_optional_membership
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import CommodityGroup
+from app.models import CommodityGroup, Organization
 from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote
 from app.services import extraction as svc
 from app.services.pdf_layout import Box, PdfLayout, PdfRow
@@ -26,6 +27,7 @@ def line(**kw) -> LlmLine:
         position=None, vendor_item_number=None, description="Thing", kind="item",
         parent_position=None, quantity=1, unit="ea", list_unit_price=None,
         adjustment_percent=None, unit_price=None, total_price=10.0, source_rows=[],
+        commodity_group_id=None,
     )
     base.update(kw)
     return LlmLine(**base)
@@ -175,13 +177,18 @@ def completion(parsed=None, finish="stop", refusal=None):
     return SimpleNamespace(choices=[SimpleNamespace(finish_reason=finish, message=msg)])
 
 
+ORG = uuid.uuid4()
+
+
 @pytest.fixture
 def db():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
                            poolclass=StaticPool)
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine)()
-    s.add(CommodityGroup(id=15, category="Facilities", name="Office Equipment"))
+    s.add(Organization(id=ORG, name="Org", slug="org"))
+    s.add(CommodityGroup(id=15, organization_id=ORG, category="Facilities",
+                         name="Office Equipment"))
     s.commit()
     yield s
     s.close()
@@ -204,7 +211,7 @@ def test_success_call_shape(monkeypatch, db, rows_layout):
     fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")],
                                                          commodity_group_id=15))))
     monkeypatch.setattr(svc.settings, "openai_temperature", 0.0)
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert r.success and r.data.commodity_group_name == "Office Equipment"
     kw = fake.calls[0]
     assert kw["response_format"] is LlmQuote and kw["max_completion_tokens"] == 8000
@@ -216,7 +223,7 @@ def test_success_call_shape(monkeypatch, db, rows_layout):
 def test_temperature_omitted_when_none(monkeypatch, db, rows_layout):
     fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
     monkeypatch.setattr(svc.settings, "openai_temperature", None)
-    svc.extract_from_pdf(b"%PDF-", db)
+    svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert "temperature" not in fake.calls[0]
 
 
@@ -231,7 +238,7 @@ def test_settings_defaults_omit_temperature(monkeypatch, db, rows_layout):
     monkeypatch.setattr(svc.settings, "openai_model", defaults.openai_model)
     monkeypatch.setattr(svc.settings, "openai_temperature", defaults.openai_temperature)
     fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
-    svc.extract_from_pdf(b"%PDF-", db)
+    svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert fake.calls[0]["model"] == "gpt-6.1-sol"
     assert "temperature" not in fake.calls[0]
 
@@ -239,25 +246,25 @@ def test_settings_defaults_omit_temperature(monkeypatch, db, rows_layout):
 def test_scan_pdf_no_model_call(monkeypatch, db):
     monkeypatch.setattr(svc, "extract_layout", lambda b: PdfLayout(rows=[], page_count=2))
     fake = use(monkeypatch, FakeClient())
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and r.error == NO_TEXT and fake.calls == []
 
 
 def test_length_and_refusal_errors(monkeypatch, db, rows_layout):
     use(monkeypatch, FakeClient(completion(finish="length")))
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and "too long" in r.error
     use(monkeypatch, FakeClient(completion(refusal="I can't help")))
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and "I can't help" in r.error
     use(monkeypatch, FakeClient(completion(parsed=None)))
-    assert not svc.extract_from_pdf(b"%PDF-", db).success
+    assert not svc.extract_from_pdf(b"%PDF-", db, ORG).success
 
 
 def test_sdk_length_error_readable(monkeypatch, db, rows_layout):
     exc = openai.LengthFinishReasonError(completion=SimpleNamespace(usage=None))
     use(monkeypatch, FakeClient(exc=exc))
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and "too long" in r.error
 
 
@@ -268,7 +275,7 @@ def test_sdk_exception_readable(monkeypatch, db, rows_layout, caplog):
     exc = openai.APIConnectionError(request=SimpleNamespace())
     use(monkeypatch, FakeClient(exc=exc))
     with caplog.at_level("ERROR", logger=svc.logger.name):
-        r = svc.extract_from_pdf(b"%PDF-", db)
+        r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and r.error == READABLE_FAILURE
     assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
 
@@ -277,7 +284,7 @@ def test_generic_exception_readable(monkeypatch, db, rows_layout, caplog):
     exc = RuntimeError("Error code: 400 - secret internals")
     use(monkeypatch, FakeClient(exc=exc))
     with caplog.at_level("ERROR", logger=svc.logger.name):
-        r = svc.extract_from_pdf(b"%PDF-", db)
+        r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert r.error == READABLE_FAILURE and "400" not in r.error
     assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
 
@@ -285,7 +292,7 @@ def test_generic_exception_readable(monkeypatch, db, rows_layout, caplog):
 def test_missing_api_key(monkeypatch, db, rows_layout):
     monkeypatch.setattr(svc.settings, "openai_api_key", None)
     fake = use(monkeypatch, FakeClient())
-    r = svc.extract_from_pdf(b"%PDF-", db)
+    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and "OPENAI_API_KEY" in r.error and fake.calls == []
 
 
@@ -294,6 +301,7 @@ def test_missing_api_key(monkeypatch, db, rows_layout):
 
 def test_endpoint_requires_pdf_bytes(monkeypatch):
     monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: object())
+    monkeypatch.setitem(app.dependency_overrides, get_optional_membership, lambda: None)
     c = TestClient(app)
     r = c.post("/extraction/pdf", files={"file": ("a.pdf", b"hello", "application/pdf")})
     assert r.status_code == 400
@@ -307,6 +315,8 @@ def test_endpoint_unauthenticated():
 def test_endpoint_happy_path(monkeypatch, db, rows_layout):
     use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
     monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: object())
+    monkeypatch.setitem(app.dependency_overrides, get_optional_membership,
+                        lambda: SimpleNamespace(organization_id=ORG))
     monkeypatch.setitem(app.dependency_overrides, get_db, lambda: db)
     r = TestClient(app).post("/extraction/pdf",
                              files={"file": ("a.pdf", b"%PDF-1.4 x", "application/pdf")})

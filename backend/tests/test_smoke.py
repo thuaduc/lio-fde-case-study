@@ -62,6 +62,12 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _group(token: str, name: str) -> int:
+    """Id of the caller's org's commodity group by name (groups are per org)."""
+    groups = client.get("/commodity-groups", headers=_auth(token)).json()
+    return next(g["id"] for g in groups if g["name"] == name)
+
+
 def test_full_user_journey():
     # --- health ---
     assert client.get("/health").json() == {"status": "ok"}
@@ -138,9 +144,11 @@ def test_full_user_journey():
     # --- commodity groups ---
     r = client.get("/commodity-groups", headers=_auth(owner_token))
     assert r.status_code == 200
-    group_ids = [g["id"] for g in r.json()]
-    assert 15 in group_ids and 31 in group_ids and 43 in group_ids
-    assert len(group_ids) >= 300
+    group_names = {g["name"] for g in r.json()}
+    assert {"Office Equipment", "Software", "Promotional Materials"} <= group_names
+    assert len(group_names) >= 300
+    software = _group(owner_token, "Software")
+    office_equipment = _group(owner_token, "Office Equipment")
 
     # --- create request (camelCase payload, as the frontend sends) ---
     payload = {
@@ -148,7 +156,7 @@ def test_full_user_journey():
         "titleShortDescription": "Software Licenses",
         "vendorName": "Adobe Systems",
         "vatId": "12-3456789",
-        "commodityGroupId": 31,
+        "commodityGroupId": software,
         "totalCost": 1500.0,
         "department": "IT",
         "orderLines": [
@@ -228,7 +236,7 @@ def test_full_user_journey():
         "title": "Software Licenses (updated)",
         "vendorName": "Adobe Systems",
         "vatId": "12-3456789",
-        "commodityGroupId": 15,
+        "commodityGroupId": office_equipment,
         "totalCost": 500.0,
         "department": "IT",
         "orderLines": [
@@ -252,7 +260,7 @@ def test_full_user_journey():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["title"] == "Software Licenses (updated)"
-    assert body["commodity_groups"]["id"] == 15
+    assert body["commodity_groups"]["id"] == office_equipment
     assert [l["position_description"] for l in body["order_lines"]] == ["Desk", "Chair"]
     assert body["order_lines"][1]["amount"] == 1.28  # decimal amounts supported
     assert [l["line_order"] for l in body["order_lines"]] == [1, 2]
@@ -421,10 +429,12 @@ def test_activity_log_and_document():
     admin = client.post(
         "/auth/signin", json={"email": "admin@acme.com", "password": "demo1234"}
     ).json()["access_token"]
+    office_equipment = _group(admin, "Office Equipment")
 
     payload = {
         "requestorName": "Alex Admin", "titleShortDescription": "Chairs",
-        "vendorName": "FurnitureCo", "vatId": "12-0000001", "commodityGroupId": 15,
+        "vendorName": "FurnitureCo", "vatId": "12-0000001",
+        "commodityGroupId": office_equipment,
         "totalCost": 2500.0, "department": "Ops",
         "orderLines": [
             # Above Acme's $2,000 auto-approval threshold, so it needs sign-off.
@@ -443,7 +453,8 @@ def test_activity_log_and_document():
     # RequestUpdate uses "title" (not titleShortDescription)
     updated = {
         "requestorName": "Alex Admin", "title": "Office Chairs", "vendorName": "FurnitureCo",
-        "vatId": "12-0000001", "commodityGroupId": 15, "totalCost": 2600.0, "department": "Ops",
+        "vatId": "12-0000001", "commodityGroupId": office_equipment, "totalCost": 2600.0,
+        "department": "Ops",
         "orderLines": updated["orderLines"],
     }
     r = client.put(f"/requests/{rid}", json=updated, headers=_auth(admin))
@@ -504,16 +515,33 @@ def test_extraction_without_api_key():
 
 
 def test_commodity_groups_expanded():
+    # The large global taxonomy stays as fixed-id templates...
+    with TestingSession() as db:
+        templates = db.scalars(
+            select(CommodityGroup)
+            .where(CommodityGroup.organization_id.is_(None))
+            .order_by(CommodityGroup.id)
+        ).all()
+    assert len(templates) >= 1000, f"expected a large taxonomy, got {len(templates)}"
+    assert [g.id for g in templates] == list(range(1, len(templates) + 1))
+    assert (templates[0].category, templates[0].name) == (
+        "General Services", "Accommodation Rentals"
+    )
+
+    # ...and each org lists its own copy of the base templates.
     r = client.post("/auth/signup", json={"email": "cg@example.com", "password": "secret123"})
     token = r.json()["access_token"]
-
+    client.post("/organizations", json={"name": "CG Co", "slug": "cg-co"},
+                headers=_auth(token))
     r = client.get("/commodity-groups", headers=_auth(token))
     assert r.status_code == 200
     groups = r.json()
-    # Large taxonomy.
-    assert len(groups) >= 1000, f"expected a large taxonomy, got {len(groups)}"
-    # ids contiguous from 1; first one matches the original taxonomy
-    assert groups[0] == {"id": 1, "category": "General Services", "name": "Accommodation Rentals"}
+    assert len(groups) >= 300
+    assert groups == sorted(groups, key=lambda g: (g["category"], g["name"]))
+    assert any(
+        (g["category"], g["name"]) == ("General Services", "Accommodation Rentals")
+        for g in groups
+    )
     assert len({g["category"] for g in groups}) >= 20
 
     # Every leaf name belongs to exactly one category.
@@ -655,7 +683,7 @@ def test_approval_flow_with_roles():
         "titleShortDescription": "Laptops",
         "vendorName": "TechSupply",
         "vatId": "99-9999999",
-        "commodityGroupId": 31,
+        "commodityGroupId": _group(requester, "Software"),
         "totalCost": 4200.0,
         "department": "Engineering",
         "orderLines": [
@@ -741,7 +769,8 @@ def test_org_settings_required_fields():
 
     base_payload = {
         "requestorName": "S", "titleShortDescription": "T", "vendorName": "V",
-        "vatId": "", "commodityGroupId": 31, "totalCost": 10.0, "department": "",
+        "vatId": "", "commodityGroupId": _group(token, "Software"), "totalCost": 10.0,
+        "department": "",
         "orderLines": [
             {"positionDescription": "x", "unitPrice": 10, "amount": 1, "unit": "pc", "totalPrice": 10}
         ],

@@ -2,7 +2,14 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.schemas.extraction import LineKind
 from app.services.pdf_layout import Box
@@ -39,6 +46,9 @@ class OrderLineIn(BaseModel):
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, alias="sourceText")
     article_id: uuid.UUID | None = Field(default=None, alias="articleId")
+    # The org's group for this line. Adjustments with a parent and no group
+    # take the parent's group on save.
+    commodity_group_id: int | None = Field(default=None, alias="commodityGroupId")
 
 
 class RequestCreate(BaseModel):
@@ -48,7 +58,9 @@ class RequestCreate(BaseModel):
     title: str = Field(alias="titleShortDescription")
     vendor_name: str = Field(alias="vendorName")
     vat_id: str | None = Field(default=None, alias="vatId")
-    commodity_group_id: int = Field(alias="commodityGroupId")
+    # Used only when no line has a group; otherwise the server sets the
+    # primary group (largest active spend) from the lines.
+    commodity_group_id: int | None = Field(default=None, alias="commodityGroupId")
     # Ignored: the server computes the total from the lines (kept so older
     # clients that still send it validate).
     total_cost: float | None = Field(default=None, alias="totalCost")
@@ -74,7 +86,8 @@ class RequestUpdate(BaseModel):
     title: str
     vendor_name: str = Field(alias="vendorName")
     vat_id: str | None = Field(default=None, alias="vatId")
-    commodity_group_id: int = Field(alias="commodityGroupId")
+    # Same rule as RequestCreate: only used when no line has a group.
+    commodity_group_id: int | None = Field(default=None, alias="commodityGroupId")
     total_cost: float | None = Field(default=None, alias="totalCost")  # ignored
     department: str | None = None
     quote_number: str | None = Field(default=None, alias="quoteNumber")
@@ -108,6 +121,22 @@ class CommodityGroupOut(BaseModel):
     id: int
     category: str
     name: str
+    description: str | None = None
+    archived: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_row(cls, data):
+        # ORM rows carry archived_at; the API exposes a plain flag.
+        if hasattr(data, "archived_at"):
+            return {
+                "id": data.id,
+                "category": data.category,
+                "name": data.name,
+                "description": data.description,
+                "archived": data.archived_at is not None,
+            }
+        return data
 
 
 class OrderLineOut(BaseModel):
@@ -140,6 +169,9 @@ class OrderLineOut(BaseModel):
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, serialization_alias="sourceText")
     article_id: uuid.UUID | None = Field(default=None, serialization_alias="articleId")
+    commodity_group_id: int | None = Field(
+        default=None, serialization_alias="commodityGroupId"
+    )
 
     @field_validator("sources", mode="before")
     @classmethod
