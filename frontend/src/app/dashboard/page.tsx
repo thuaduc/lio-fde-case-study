@@ -5,8 +5,12 @@ import Link from 'next/link';
 import * as api from '@/lib/api';
 import { Button } from '@/components/base';
 import { PieChart, type PieChartData } from '@/components/PieChart';
+import { usd } from '@/components/OrderLinesEditor';
 import type { CommodityGroup, ProcurementRequestWithDetails } from '@/types/database';
 import { spendByGroup } from '@/lib/orderLines';
+import { SERIES_COLORS, colorsByRank, slices } from '@/lib/charts';
+
+const requestCount = (n: number) => `${n} request${n === 1 ? '' : 's'}`;
 
 export default function DashboardPage() {
   const [requests, setRequests] = useState<ProcurementRequestWithDetails[]>([]);
@@ -18,7 +22,8 @@ export default function DashboardPage() {
       try {
         const [requestsData, groups] = await Promise.all([
           api.requests.list(),
-          api.commodityGroups.list(),
+          // Archived groups too: requests booked to them still count.
+          api.commodityGroups.list(true),
         ]);
         setRequests(requestsData);
         setCommodityGroups(groups);
@@ -48,22 +53,25 @@ export default function DashboardPage() {
   const closedRequests = requests.filter((r) => r.status === 'closed').length;
   const totalValue = requests.reduce((sum, r) => sum + (r.total_cost || 0), 0);
 
-  // Prepare pie chart data for all requests by status
+  // Requests by status; each status keeps its colour when another has none.
   const statusData: PieChartData[] = [
-    { name: 'Open', value: openRequests },
-    { name: 'In Progress', value: inProgressRequests },
-    { name: 'Closed', value: closedRequests },
+    { name: 'Open', value: openRequests, color: SERIES_COLORS[0] },
+    { name: 'In Progress', value: inProgressRequests, color: SERIES_COLORS[1] },
+    { name: 'Closed', value: closedRequests, color: SERIES_COLORS[2] },
   ].filter((item) => item.value > 0);
 
-  // Spend per commodity group, booked line by line: one request can span several
-  // groups. Line totals exclude tax, which isn't spend on any group.
-  const spendData = (reqs: ProcurementRequestWithDetails[]): PieChartData[] =>
-    [...spendByGroup(reqs)].flatMap(([id, value]) => {
-      const group = commodityGroups.find((g) => g.id === id);
-      return group && value > 0 ? [{ name: group.name, value }] : [];
-    });
-  const closedCommodityGroupData = spendData(requests.filter((r) => r.status === 'closed'));
-  const allCommodityGroupData = spendData(requests);
+  // Value per commodity group, booked line by line: one request can span several
+  // groups. Line totals exclude tax, which isn't booked to any group. Colours are
+  // ranked on all requests, so a group has the same colour in both charts.
+  const allSpend = spendByGroup(requests);
+  const groupColors = colorsByRank(allSpend);
+  const groupName = (id: number) => commodityGroups.find((g) => g.id === id)?.name;
+  const closedCommodityGroupData = slices(
+    spendByGroup(requests.filter((r) => r.status === 'closed')),
+    groupColors,
+    groupName,
+  );
+  const allCommodityGroupData = slices(allSpend, groupColors, groupName);
 
   // Placeholder data for empty charts
   const placeholderStatusData: PieChartData[] = [
@@ -206,6 +214,7 @@ export default function DashboardPage() {
                 size={280}
                 showLabels={false}
                 showLegend={true}
+                formatValue={requestCount}
               />
             ) : (
               <>
@@ -237,9 +246,12 @@ export default function DashboardPage() {
         {/* Closed Requests by Commodity Group */}
         <div className="lio-card p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-ink">
-              Closed Requests by Group
-            </h2>
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-ink">
+                Closed Request Value by Group
+              </h2>
+              <p className="mt-0.5 text-xs text-ink/45">Line totals, excl. tax</p>
+            </div>
           </div>
           <div className="relative flex items-center justify-center min-h-[320px]">
             {closedCommodityGroupData.length > 0 ? (
@@ -248,6 +260,7 @@ export default function DashboardPage() {
                 size={280}
                 showLabels={false}
                 showLegend={true}
+                formatValue={usd}
               />
             ) : (
               <>
@@ -262,7 +275,7 @@ export default function DashboardPage() {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-6 max-w-[200px] text-center">
                     <p className="text-sm text-gray-700 font-medium">
-                      Your closed requests data will appear here
+                      Closed request value will appear here once a request is closed
                     </p>
                   </div>
                 </div>
@@ -274,9 +287,12 @@ export default function DashboardPage() {
         {/* All Requests by Commodity Group */}
         <div className="lio-card p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-ink">
-              All Requests by Group
-            </h2>
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-ink">
+                Request Value by Group
+              </h2>
+              <p className="mt-0.5 text-xs text-ink/45">All requests · line totals, excl. tax</p>
+            </div>
           </div>
           <div className="relative flex items-center justify-center min-h-[320px]">
             {allCommodityGroupData.length > 0 ? (
@@ -285,6 +301,7 @@ export default function DashboardPage() {
                 size={280}
                 showLabels={false}
                 showLegend={true}
+                formatValue={usd}
               />
             ) : (
               <>
@@ -299,7 +316,7 @@ export default function DashboardPage() {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-6 max-w-[200px] text-center">
                     <p className="text-sm text-gray-700 font-medium">
-                      Your requests data will appear here once commodity groups are assigned
+                      Request value by group will appear here once you create a request
                     </p>
                   </div>
                 </div>

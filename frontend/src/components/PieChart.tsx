@@ -2,6 +2,7 @@
 
 import React from 'react';
 import dynamic from 'next/dynamic';
+import { SERIES_COLORS } from '@/lib/charts';
 
 // Dynamically import ApexCharts to avoid SSR issues
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
@@ -9,6 +10,8 @@ const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
 export interface PieChartData {
   name: string;
   value: number;
+  /** The entity's colour; defaults to the categorical slot for its position. */
+  color?: string;
 }
 
 export interface PieChartProps {
@@ -18,22 +21,13 @@ export interface PieChartProps {
   showLegend?: boolean;
   className?: string;
   title?: string;
+  /**
+   * Formats a value with its unit (e.g. "3 requests", "$1,234.00"). When set,
+   * the legend lists each value and the tooltip adds the share. Omit for
+   * placeholder charts, whose numbers are not real.
+   */
+  formatValue?: (value: number) => string;
 }
-
-// Lio-aligned categorical palette: anchored on the cyan/teal + ink family,
-// with a few muted complementary hues for larger series.
-const CHART_COLORS = [
-  '#0c6f80', // accent-deep (teal)
-  '#6fc7d8', // accent (cyan)
-  '#1d2530', // ink
-  '#4b9aa8', // muted teal
-  '#c9a24a', // muted amber
-  '#3a8f7d', // muted green
-  '#7d8896', // slate
-  '#155e6b', // deep teal
-  '#a9cfd8', // pale cyan
-  '#576270', // graphite
-];
 
 export function PieChart({
   data,
@@ -42,6 +36,7 @@ export function PieChart({
   showLegend = true,
   className = '',
   title = '',
+  formatValue,
 }: PieChartProps) {
   // Safety check for data
   if (!data || data.length === 0) {
@@ -52,6 +47,9 @@ export function PieChart({
     );
   }
 
+  const total = data.reduce((sum, d) => sum + d.value, 0);
+  const share = (v: number) => (total > 0 ? `${Math.round((v / total) * 100)}%` : '');
+
   const chartOptions: ApexCharts.ApexOptions = {
     chart: {
       type: 'pie',
@@ -61,13 +59,19 @@ export function PieChart({
       },
     },
     labels: data.map((item) => item.name),
-    colors: CHART_COLORS,
+    colors: data.map((item, i) => item.color ?? SERIES_COLORS[i % SERIES_COLORS.length]),
+    // A 2px surface gap between slices.
+    stroke: { width: 2, colors: ['#ffffff'] },
     legend: {
       show: showLegend,
       position: 'bottom',
       labels: {
         colors: '#4b5563',
       },
+      // Values stay readable without hovering or telling colours apart.
+      formatter: formatValue
+        ? (name, opts) => `${name} · ${formatValue(data[opts.seriesIndex]?.value ?? 0)}`
+        : undefined,
     },
     dataLabels: {
       enabled: showLabels,
@@ -95,10 +99,9 @@ export function PieChart({
       },
     },
     tooltip: {
+      enabled: !!formatValue,
       y: {
-        formatter: (val) => {
-          return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-        },
+        formatter: (val) => (formatValue ? `${formatValue(val)} (${share(val)})` : String(val)),
       },
     },
   };
@@ -112,4 +115,3 @@ export function PieChart({
     </div>
   );
 }
-
