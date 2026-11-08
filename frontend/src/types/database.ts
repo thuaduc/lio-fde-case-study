@@ -42,7 +42,10 @@ export type CommodityGroup = {
   id: number;
   category: string;
   name: string;
-  created_at: string;
+  /** Booking guidance; the classifier treats it as binding. */
+  description?: string | null;
+  archived?: boolean;
+  created_at?: string;
 };
 
 export type ProcurementRequest = {
@@ -95,6 +98,7 @@ export type OrderLine = {
   sources?: { page: number; x0: number; y0: number; x1: number; y1: number }[];
   sourceText?: string | null;
   articleId?: string | null;
+  commodityGroupId?: number | null;
 };
 
 // ============================================================================

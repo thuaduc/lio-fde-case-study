@@ -9,7 +9,7 @@ import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
-import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
+import { type Line, computeTotals, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
 
 /** Everything a draft keeps (the PDF is stored separately as the draft's document). */
 interface DraftData {
@@ -72,6 +72,12 @@ export default function NewRequestPage() {
     );
   };
   const totals = computeTotals(orderLines, taxTotal);
+  // Groups are booked per line; the request shows the one with the largest spend.
+  const primaryGroup = primaryGroupId(orderLines) ?? commodityGroupId;
+  const primaryGroupLabel = (() => {
+    const g = commodityGroups?.find((x) => x.id === primaryGroup);
+    return g ? `${g.category} · ${g.name}` : null;
+  })();
 
   // ---- Drafts (server-side, Gmail-style): load ?draft=<id>, autosave, delete on submit.
   const [draftId, setDraftId] = useState<string | null>(null);
@@ -299,8 +305,8 @@ export default function NewRequestPage() {
     setWarning('');
 
     // Validation with scroll to top on error
-    if (!commodityGroupId) {
-      setError('Please select a commodity group');
+    if (!primaryGroup) {
+      setError('Choose a commodity group on at least one order line');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -322,7 +328,7 @@ export default function NewRequestPage() {
         vatId,
         quoteNumber: quoteNumber || null,
         validUntil: validUntil || null,
-        commodityGroupId: commodityGroupId,
+        commodityGroupId: primaryGroup,
         totalCost: totals.grand,
         netTotal: totals.net,
         taxTotal,
@@ -534,24 +540,15 @@ export default function NewRequestPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Commodity Group *
-            </label>
-            <select
-              value={commodityGroupId || ''}
-              onChange={(e) => setCommodityGroupId(Number(e.target.value))}
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-accent-deep/60 focus:border-accent-deep/40"
-            >
-              <option value="">
-                {commodityGroups ? 'Select a commodity group' : 'Loading...'}
-              </option>
-              {commodityGroups?.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.id} - {group.category} - {group.name}
-                </option>
-              ))}
-            </select>
+            <p className="mb-1.5 text-sm font-medium text-ink/70">Primary commodity group</p>
+            <p className="text-sm text-ink">
+              {primaryGroupLabel ?? (
+                <span className="text-ink/45">Set a group on the order lines below</span>
+              )}
+            </p>
+            <p className="mt-1 text-xs text-ink/45">
+              Booked per line; the request shows the group with the largest spend.
+            </p>
           </div>
         </div>
 
@@ -564,6 +561,7 @@ export default function NewRequestPage() {
             onShowSource={fileUrl ? (sources) => docPanel.current?.showSource({ sources }) : undefined}
           />
           <OrderLinesEditor
+            groups={commodityGroups}
             lines={orderLines}
             taxTotal={taxTotal}
             editable

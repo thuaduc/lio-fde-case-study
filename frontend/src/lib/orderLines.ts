@@ -121,6 +121,26 @@ export function linesForSave(lines: Line[]): Line[] {
     );
 }
 
+/** A line's effective group: its own, or (for a linked charge) its parent's. */
+export function lineGroupId(line: Line, lines: Line[]): number | null {
+  if (line.commodityGroupId) return line.commodityGroupId;
+  const parent = byKey(lines, line.parentKey);
+  return parent?.commodityGroupId ?? null;
+}
+
+/** Request-level group = the one with the largest spend among active lines (server rule). */
+export function primaryGroupId(lines: Line[]): number | null {
+  const spend = new Map<number, number>();
+  for (const l of lines) {
+    if (!isActive(l, lines)) continue;
+    const g = lineGroupId(l, lines);
+    if (g) spend.set(g, (spend.get(g) ?? 0) + l.totalPrice);
+  }
+  let best: number | null = null;
+  for (const [g, v] of spend) if (best === null || v > (spend.get(best) ?? 0)) best = g;
+  return best;
+}
+
 /** Items in order, each followed by its children; then whole-quote charges. */
 export function groupLines(lines: Line[]): {
   items: { item: Line; children: Line[] }[];

@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
+import CommodityGroupsSettings from '@/components/CommodityGroupsSettings';
 import type { OrganizationMemberWithProfile, OrganizationInvite } from '@/types/database';
 
-type Tab = 'members' | 'settings';
+type Tab = 'members' | 'settings' | 'groups';
 
 const ROLE_BADGES: Record<string, string> = {
   admin: 'bg-ink text-white',
@@ -180,6 +181,7 @@ export default function OrganizationPage() {
           [
             { key: 'members', label: 'Members' },
             { key: 'settings', label: 'Settings' },
+            { key: 'groups', label: 'Commodity groups' },
           ] as { key: Tab; label: string }[]
         ).map((t) => (
           <button
@@ -361,6 +363,7 @@ export default function OrganizationPage() {
         </div>
         </>
       )}
+      {tab === 'groups' && <CommodityGroupsSettings />}
     </div>
   );
 }

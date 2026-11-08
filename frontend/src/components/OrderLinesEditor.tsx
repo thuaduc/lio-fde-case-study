@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { LineKind } from '@/lib/api';
+import type { CommodityGroup } from '@/types/database';
 import { Input } from '@/components/base';
 import SourceButton from '@/components/SourceButton';
 import {
@@ -13,6 +14,7 @@ import {
   newLineKey,
   recalcLine,
   setRemoved,
+  lineGroupId,
   setKind,
   swapAlternative,
 } from '@/lib/orderLines';
@@ -66,6 +68,8 @@ export interface OrderLinesEditorProps {
   /** Extra content under a line in read mode (e.g. catalog suggestions). */
   renderLineExtra?: (line: Line) => React.ReactNode;
   lockedReason?: string;
+  /** The org's active commodity groups, for the per-line picker. */
+  groups?: CommodityGroup[];
 }
 
 export default function OrderLinesEditor({
@@ -77,7 +81,12 @@ export default function OrderLinesEditor({
   quotedGrandTotal,
   renderLineExtra,
   lockedReason,
+  groups,
 }: OrderLinesEditorProps) {
+  const groupName = (id: number | null | undefined) => {
+    const g = groups?.find((x) => x.id === id);
+    return g ? g.name : null;
+  };
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const { items, quoteLevel } = groupLines(lines);
   const totals = computeTotals(lines, taxTotal);
@@ -129,6 +138,8 @@ export default function OrderLinesEditor({
       qty = `${line.amount} ${line.unit} × ${usd(line.listUnitPrice)} ${line.adjustmentPercent < 0 ? '−' : '+'}${Math.abs(line.adjustmentPercent)}%`;
     }
     parts.push(qty);
+    const g = groupName(lineGroupId(line, lines));
+    if (g) parts.push(g);
     return parts.join(' · ');
   };
 
@@ -323,6 +334,29 @@ export default function OrderLinesEditor({
                   <option key={i.key} value={i.key}>
                     {i.position ? `${i.position} · ` : ''}
                     {i.positionDescription.slice(0, 60)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {groups && (
+            <label className="block sm:col-span-2">
+              <span className="mb-1.5 block text-sm font-medium text-ink/70">Commodity group</span>
+              <select
+                className={selectCls}
+                value={line.commodityGroupId ?? ''}
+                onChange={(e) =>
+                  patch(line.key, { commodityGroupId: e.target.value ? Number(e.target.value) : null }, false)
+                }
+              >
+                <option value="">
+                  {line.parentKey && line.kind !== 'item' && lineGroupId(line, lines)
+                    ? `Same as its position (${groupName(lineGroupId(line, lines))})`
+                    : 'Choose a group…'}
+                </option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.category} · {g.name}
                   </option>
                 ))}
               </select>

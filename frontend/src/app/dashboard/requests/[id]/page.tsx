@@ -11,7 +11,7 @@ import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
-import { type Line, linesForSave, normalizeLines } from '@/lib/orderLines';
+import { type Line, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
 import { approvalLabel } from '@/lib/approval';
 
 /** Map stored lines (snake_case base + camelCase rich fields) to editor lines. */
@@ -33,6 +33,7 @@ const toEditorLines = (req: ProcurementRequestWithDetails): Line[] =>
       sources: l.sources ?? [],
       sourceText: l.sourceText ?? null,
       articleId: l.articleId ?? null,
+      commodityGroupId: l.commodityGroupId ?? null,
     })),
   );
 
@@ -185,7 +186,8 @@ export default function RequestDetailPage() {
     title: header.title,
     vendorName: header.vendorName,
     vatId: header.vatId,
-    commodityGroupId: header.commodityGroupId || 0,
+    // Groups are booked per line; the server derives the request's from them.
+    commodityGroupId: primaryGroupId(editorLines) ?? header.commodityGroupId ?? null,
     totalCost: header.totalCost,
     department: header.department,
     taxTotal: tax,
@@ -344,7 +346,7 @@ export default function RequestDetailPage() {
                 value={request.validUntil ? new Date(`${request.validUntil}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}
               />
               <Field
-                label="Commodity Group"
+                label="Primary commodity group"
                 value={request.commodity_groups
                   ? `${request.commodity_groups.category} · ${request.commodity_groups.name}`
                   : '—'}
@@ -374,6 +376,7 @@ export default function RequestDetailPage() {
               </p>
             )}
             <OrderLinesEditor
+              groups={commodityGroups}
               lines={lines}
               taxTotal={taxTotal}
               editable={request.status === 'open'}
@@ -456,22 +459,9 @@ export default function RequestDetailPage() {
                 <Input label="Tax ID" value={form.vatId}
                   onChange={(e) => setForm({ ...form, vatId: e.target.value })} />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-ink/70 mb-1.5">Commodity Group *</label>
-                <select
-                  value={form.commodityGroupId || ''}
-                  onChange={(e) => setForm({ ...form, commodityGroupId: Number(e.target.value) })}
-                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60"
-                >
-                  <option value="">Select a commodity group</option>
-                  {commodityGroups?.map((g) => (
-                    <option key={g.id} value={g.id}>{g.id} - {g.category} - {g.name}</option>
-                  ))}
-                </select>
-              </div>
-              <Input label="Total Cost ($) *" type="number" step="0.01" value={form.totalCost}
-                onChange={(e) => setForm({ ...form, totalCost: parseFloat(e.target.value) || 0 })} />
-              <p className="text-xs text-ink/45">Order lines are edited from the request creation flow.</p>
+              <p className="text-xs text-ink/45">
+                Order lines, commodity groups and totals are edited in the Order Lines card.
+              </p>
             </div>
             <div className="border-t border-line p-6 bg-ink-800/[0.02] flex gap-3">
               <Button onClick={saveEdit} loading={busy} disabled={busy} className="flex-1">Save Changes</Button>

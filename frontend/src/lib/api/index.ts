@@ -102,6 +102,8 @@ export interface OrderLineInput {
   sources?: SourceBox[];
   sourceText?: string | null;
   articleId?: string | null;
+  /** The org's commodity group for this line (per-line booking). */
+  commodityGroupId?: number | null;
 }
 
 export interface CreateRequestInput {
@@ -114,7 +116,8 @@ export interface CreateRequestInput {
   titleShortDescription: string;
   vendorName: string;
   vatId: string;
-  commodityGroupId: number;
+  /** Optional: derived server-side from the lines' groups when they have them. */
+  commodityGroupId?: number | null;
   totalCost: number;
   netTotal?: number | null;
   taxTotal?: number | null;
@@ -131,7 +134,8 @@ export interface UpdateRequestInput {
   title: string;
   vendorName: string;
   vatId: string;
-  commodityGroupId: number;
+  /** Optional: derived server-side from the lines' groups when they have them. */
+  commodityGroupId?: number | null;
   totalCost: number;
   netTotal?: number | null;
   taxTotal?: number | null;
@@ -343,9 +347,31 @@ export const organizations = {
 // Commodity groups
 // ============================================================================
 
+export interface CommodityGroupInput {
+  category: string;
+  name: string;
+  description?: string | null;
+}
+
 export const commodityGroups = {
-  list(): Promise<CommodityGroup[]> {
-    return apiFetch('/commodity-groups');
+  list(includeArchived = false): Promise<CommodityGroup[]> {
+    return apiFetch(`/commodity-groups${includeArchived ? '?include_archived=true' : ''}`);
+  },
+  create(input: CommodityGroupInput): Promise<CommodityGroup> {
+    return apiFetch('/commodity-groups', { body: input });
+  },
+  update(id: number, input: Partial<CommodityGroupInput>): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}`, { method: 'PATCH', body: input });
+  },
+  /** 409 while requests use it: archive instead. */
+  delete(id: number): Promise<void> {
+    return apiFetch(`/commodity-groups/${id}`, { method: 'DELETE' });
+  },
+  archive(id: number): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}/archive`, { method: 'POST' });
+  },
+  unarchive(id: number): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}/unarchive`, { method: 'POST' });
   },
 };
 
