@@ -14,7 +14,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CommodityGroup
-from app.schemas.extraction import LlmLine, LlmQuote
+from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote
 from app.services import extraction as svc
 from app.services.pdf_layout import Box, PdfLayout, PdfRow
 
@@ -31,12 +31,19 @@ def line(**kw) -> LlmLine:
     return LlmLine(**base)
 
 
+def fsr(**kw) -> LlmFieldSources:
+    base = dict(vendor_name=[], vendor_tax_id=[], department=[], quote_number=[],
+                valid_until=[])
+    base.update(kw)
+    return LlmFieldSources(**base)
+
+
 def quote(lines, **kw) -> LlmQuote:
     base = dict(
         title="Quote", vendor_name="Acme", vendor_tax_id="12-3456789", department="IT",
         quote_number="Q1", valid_until="2026-12-31", currency="USD", lines=lines,
         net_total=None, tax_total=None, grand_total=None, unpriced_charges=[],
-        commodity_group_id=None,
+        commodity_group_id=None, field_source_rows=fsr(),
     )
     base.update(kw)
     return LlmQuote(**base)
@@ -311,7 +318,7 @@ def test_endpoint_happy_path(monkeypatch, db, rows_layout):
 
 # --- source boxes, price verification, reconciliation ---------------------------
 
-from app.schemas.extraction import ExtractedLine  # noqa: E402
+from app.schemas.extraction import ExtractedLine, ExtractedVendorData  # noqa: E402
 from app.services.pdf_layout import Word  # noqa: E402
 
 
@@ -540,3 +547,59 @@ def test_none_totals_no_crash():
     assert svc.reconcile([el("1", 5)], None, 1.0, None) == []
     assert svc.reconcile([el("1", 5)], 5.0, None, 9.0) == []
     assert svc.reconcile([el("1", 5)], None, None, 9.0) == []
+
+
+# --- header field sources ---
+
+
+def test_llm_field_sources_is_strict():
+    with pytest.raises(Exception):
+        LlmFieldSources(vendor_name=[])  # all five are required
+    props = LlmQuote.model_json_schema()["$defs"]["LlmFieldSources"]["properties"]
+    assert set(props) == {"vendor_name", "vendor_tax_id", "department",
+                          "quote_number", "valid_until"}
+
+
+def test_field_sources_resolved_and_keys_camel():
+    lt = lay(mkrow("v", "Acme Corp", y0=0.05, y1=0.07), mkrow("q", "Quote Q1", y0=0.30, y1=0.32))
+    q = quote([], field_source_rows=fsr(vendor_name=["v"], quote_number=["q"]))
+    data, _ = svc.to_extracted(q, lt, GROUPS)
+    assert set(data.field_sources) == {"vendorName", "quoteNumber"}
+    assert data.field_sources["vendorName"] == [lt.rows[0].box]
+    wire = data.model_dump(by_alias=True)
+    assert "fieldSources" in wire and "field_sources" not in wire
+
+
+def test_field_sources_unknown_rows_dropped_and_empty_omitted():
+    lt = lay(mkrow("v", "Acme Corp"))
+    q = quote([], field_source_rows=fsr(vendor_name=["nope"], department=["v"]))
+    data, _ = svc.to_extracted(q, lt, GROUPS)
+    assert "vendorName" not in data.field_sources
+    assert "vatId" not in data.field_sources
+    assert "department" in data.field_sources
+
+
+def test_field_sources_omitted_when_value_null():
+    lt = lay(mkrow("v", "EIN: 1"))
+    q = quote([], vendor_tax_id=None, valid_until=None,
+              field_source_rows=fsr(vendor_tax_id=["v"], valid_until=["v"]))
+    data, _ = svc.to_extracted(q, lt, GROUPS)
+    assert data.field_sources == {}
+
+
+def test_field_sources_default_empty():
+    assert ExtractedVendorData().field_sources == {}
+
+
+def test_hollis_vat_box_is_ein_row(quote_bytes):
+    from app.services.pdf_layout import extract_layout
+    from tests.test_pdf_layout import HOLLIS
+    layout = extract_layout(quote_bytes(HOLLIS))
+    row = next(r for r in layout.rows if "EIN: 94 1985704" in r.text)
+    q = quote([], vendor_tax_id="94 1985704", field_source_rows=fsr(vendor_tax_id=[row.id]))
+    data, _ = svc.to_extracted(q, layout, GROUPS)
+    assert data.field_sources["vatId"] == [row.box]
+
+
+def test_prompt_cites_header_rows():
+    assert "field_source_rows" in svc._build_pdf_prompt("", "")

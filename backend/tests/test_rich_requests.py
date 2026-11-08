@@ -413,3 +413,25 @@ def test_fractional_list_price_round_trips(client, auth):
     # the raw (unrounded) inputs also compare equal
     r = put(client, auth, rid, lines)
     assert r.status_code == 200, r.text
+
+
+FS = {"vendorName": [BOX], "vatId": [{"page": 1, "x0": 0.2, "y0": 0.3, "x1": 0.6, "y1": 0.32}]}
+
+
+def test_field_sources_round_trip_and_header_only_keeps(client, auth):
+    body = _make(client, auth, fieldSources=FS)
+    rid = body["id"]
+    assert body["fieldSources"] == FS
+    assert client.get(f"/requests/{rid}", headers=auth).json()["fieldSources"] == FS
+    # header-only PUT without fieldSources keeps it
+    r = put(client, auth, rid, _echo(body), requestorName="Someone Else")
+    assert r.status_code == 200, r.text
+    assert r.json()["fieldSources"] == FS
+    # explicit fieldSources replaces it
+    r = put(client, auth, rid, _echo(body), fieldSources={"vendorName": [BOX]})
+    assert r.json()["fieldSources"] == {"vendorName": [BOX]}
+
+
+def test_field_sources_absent_is_null(client, auth):
+    body = _make(client, auth)
+    assert body["fieldSources"] is None

@@ -229,6 +229,7 @@ Rules:
 - Use plain numbers only (no currency symbols). US number formatting: "1,438.00" = 1438.00. Write units out in plain English (e.g. "ea." -> "pieces").
 - net_total is the subtotal before tax, tax_total the tax, grand_total the amount payable including tax.
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
+- field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 94 1985704' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
 - commodity_group_id: choose the SINGLE most appropriate group below, or null if genuinely uncertain.
 
@@ -367,16 +368,48 @@ def _merge_boxes(rows: list) -> list[Box]:
     return boxes
 
 
+def _cited_rows(row_ids: list[str], layout: PdfLayout) -> list:
+    """Layout rows for the cited ids, in citation order; unknown ids and repeats dropped."""
+    by_id = {r.id: r for r in layout.rows}
+    rows = []
+    for rid in row_ids:
+        row = by_id.get(rid)
+        if row is not None and row not in rows:
+            rows.append(row)
+    return rows
+
+
+def boxes_for_rows(row_ids: list[str], layout: PdfLayout) -> list[Box]:
+    """Merged boxes for the cited row ids; unknown ids are dropped."""
+    return _merge_boxes(_cited_rows(row_ids, layout))
+
+
+# LlmFieldSources attribute -> (ExtractedVendorData wire key, LlmQuote value attribute)
+_HEADER_FIELDS = (
+    ("vendor_name", "vendorName", "vendor_name"),
+    ("vendor_tax_id", "vatId", "vendor_tax_id"),
+    ("department", "department", "department"),
+    ("quote_number", "quoteNumber", "quote_number"),
+    ("valid_until", "validUntil", "valid_until"),
+)
+
+
+def resolve_field_sources(q: LlmQuote, layout: PdfLayout) -> dict[str, list[Box]]:
+    out: dict[str, list[Box]] = {}
+    for attr, key, value_attr in _HEADER_FIELDS:
+        if not getattr(q, value_attr):
+            continue
+        boxes = boxes_for_rows(getattr(q.field_source_rows, attr), layout)
+        if boxes:
+            out[key] = boxes
+    return out
+
+
 def resolve_sources(
     line: LlmLine, layout: PdfLayout
 ) -> tuple[list[Box], str | None, bool]:
     """(merged boxes, source_text, price verified) from the line's cited rows."""
-    by_id = {r.id: r for r in layout.rows}
-    rows = []
-    for rid in line.source_rows:
-        row = by_id.get(rid)
-        if row is not None and row not in rows:
-            rows.append(row)
+    rows = _cited_rows(line.source_rows, layout)
     if not rows:
         return [], None, False
 
@@ -506,6 +539,7 @@ def to_extracted(
         currency=q.currency,
         net_total=net,
         tax_total=tax,
+        field_sources=resolve_field_sources(q, layout),
     )
     return data, warnings
 

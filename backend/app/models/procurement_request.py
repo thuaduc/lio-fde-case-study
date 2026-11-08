@@ -74,6 +74,7 @@ class ProcurementRequest(Base, TimestampMixin):
         Text, nullable=True, default="USD", server_default="USD"
     )
     extraction_warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    field_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Multi-tenancy (added in migration 003, nullable for backward compatibility)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(

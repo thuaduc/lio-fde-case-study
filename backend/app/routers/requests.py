@@ -120,6 +120,12 @@ def _log_activity(
     )
 
 
+def _dump_field_sources(fs) -> dict | None:
+    if fs is None:
+        return None
+    return {k: [b.model_dump() for b in boxes] for k, boxes in fs.items()}
+
+
 def _json_sources(sources) -> str:
     return json.dumps(
         [b.model_dump() if hasattr(b, "model_dump") else b for b in sources or []],
@@ -385,6 +391,7 @@ def create_request(
         valid_until=payload.valid_until,
         currency=payload.currency or "USD",
         extraction_warnings=payload.extraction_warnings,
+        field_sources=_dump_field_sources(payload.field_sources),
         department=payload.department,
         organization_id=membership.organization_id,
         created_by=membership.user_id,
@@ -453,6 +460,8 @@ def update_request(
         request.currency = payload.currency
     if "extraction_warnings" in sent:
         request.extraction_warnings = payload.extraction_warnings
+    if "field_sources" in sent:
+        request.field_sources = _dump_field_sources(payload.field_sources)
 
     # Replace order lines only when they changed, so a header-only save keeps
     # the stored rows (and their ids) untouched.

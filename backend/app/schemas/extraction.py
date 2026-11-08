@@ -60,6 +60,11 @@ class ExtractedVendorData(BaseModel):
     currency: str | None = None
     net_total: float | None = Field(default=None, alias="netTotal")
     tax_total: float | None = Field(default=None, alias="taxTotal")
+    # Header-field highlights keyed vendorName/vatId/department/quoteNumber/
+    # validUntil; a key is present only when it has boxes.
+    field_sources: dict[str, list[Box]] = Field(
+        default_factory=dict, alias="fieldSources"
+    )
 
 
 class ExtractionResponse(BaseModel):
@@ -92,6 +97,16 @@ class LlmLine(BaseModel):
     source_rows: list[str]
 
 
+class LlmFieldSources(BaseModel):
+    """Row ids where each header value is printed (empty list if not on the quote)."""
+
+    vendor_name: list[str]
+    vendor_tax_id: list[str]
+    department: list[str]
+    quote_number: list[str]
+    valid_until: list[str]
+
+
 class LlmQuote(BaseModel):
     title: str | None
     vendor_name: str | None
@@ -106,3 +121,4 @@ class LlmQuote(BaseModel):
     grand_total: float | None
     unpriced_charges: list[str]
     commodity_group_id: int | None
+    field_source_rows: LlmFieldSources

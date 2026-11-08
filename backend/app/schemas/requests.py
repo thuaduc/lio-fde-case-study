@@ -60,6 +60,9 @@ class RequestCreate(BaseModel):
     extraction_warnings: list[str] | None = Field(
         default=None, alias="extractionWarnings"
     )
+    field_sources: dict[str, list[Box]] | None = Field(
+        default=None, alias="fieldSources"
+    )
     order_lines: list[OrderLineIn] = Field(alias="orderLines", min_length=1)
 
 
@@ -79,6 +82,9 @@ class RequestUpdate(BaseModel):
     tax_total: float | None = Field(default=None, alias="taxTotal")
     extraction_warnings: list[str] | None = Field(
         default=None, alias="extractionWarnings"
+    )
+    field_sources: dict[str, list[Box]] | None = Field(
+        default=None, alias="fieldSources"
     )
     order_lines: list[OrderLineIn] = Field(alias="orderLines")
 
@@ -179,6 +185,9 @@ class RequestOut(BaseModel):
     tax_total: float | None = Field(default=None, serialization_alias="taxTotal")
     extraction_warnings: list[str] | None = Field(
         default=None, serialization_alias="extractionWarnings"
+    )
+    field_sources: dict[str, list[Box]] | None = Field(
+        default=None, serialization_alias="fieldSources"
     )
     order_lines: list[OrderLineOut]
     # Serialized as ``commodity_groups`` (the join key the frontend renders) but
