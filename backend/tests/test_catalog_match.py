@@ -212,6 +212,35 @@ def test_grinding_machine_no_match(client, org, monkeypatch):
     assert out == [{"lineIndex": 0, "suggestions": []}]
 
 
+@pytest.mark.parametrize("unit", [None, "", "piece", "sq m", "pack"])
+@pytest.mark.parametrize("with_key", [True, False])
+def test_catalog_price_requires_comparable_units(client, org, monkeypatch, unit, with_key):
+    headers, _ = org
+    fake = use(monkeypatch, FakeClient({"HAR-00172": "same"}),
+               key="sk-test" if with_key else None)
+    # Even an exact article number cannot turn one whole panel into one sq ft.
+    out = suggest(client, headers, [{
+        "description": MOSS, "unit": unit, "unitPrice": 1560.0,
+        "vendorItemNumber": "HAR-00172",
+    }])
+    assert out[0]["suggestions"] == []
+    if fake.chat_calls:
+        payload = json.loads(fake.chat_calls[0]["messages"][-1]["content"])
+        assert all(c["article_number"] != "HAR-00172"
+                   for ln in payload["lines"] for c in ln["candidates"])
+
+
+def test_catalog_price_accepts_unit_spelling_alias(client, org, monkeypatch):
+    headers, _ = org
+    use(monkeypatch, FakeClient({"HAR-00172": "same"}))
+    out = suggest(client, headers, [{
+        "description": MOSS_LINE, "unit": "square feet", "unitPrice": 52.0,
+    }])
+    (match,) = out[0]["suggestions"]
+    assert match["articleNumber"] == "HAR-00172"
+    assert match["savingPerUnit"] == 7.41
+
+
 def test_other_org_articles_excluded(client, org, monkeypatch):
     headers, _ = org
     _, other_org = make_org(client)

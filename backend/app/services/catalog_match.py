@@ -66,6 +66,22 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
+def comparable_units(left: str | None, right: str | None) -> bool:
+    """Price replacement preserves quantity, so both units must be equivalent.
+
+    Only spelling aliases are folded. Converting area, length, packs or unknown
+    units would require a new quantity; semantic matching cannot supply that.
+    """
+    aliases = {
+        "piece": "each", "pieces": "each", "pc": "each", "pcs": "each",
+        "ea": "each", "each": "each",
+        "sqft": "sq ft", "sq ft": "sq ft", "sq. ft.": "sq ft",
+        "ft²": "sq ft", "square foot": "sq ft", "square feet": "sq ft",
+    }
+    a, b = normalize(left or ""), normalize(right or "")
+    return bool(a and b and aliases.get(a, a) == aliases.get(b, b))
+
+
 def text_hash(text: str) -> str:
     return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
 
@@ -341,7 +357,7 @@ def suggest(
     shortlists = [
         shortlist(
             q.description,
-            articles,
+            [a for a in articles if comparable_units(q.unit, a.unit)],
             vectors=vectors,
             vendor_item_number=q.vendor_item_number,
         )
