@@ -13,6 +13,7 @@ from app.models.procurement_request import (
     RequestActivity,
     RequestDocument,
 )
+from app.models.request_draft import RequestDraft
 from app.models.supplier import Supplier
 from app.models.user import Profile, User
 
@@ -27,6 +28,7 @@ __all__ = [
     "OrderLine",
     "RequestActivity",
     "RequestDocument",
+    "RequestDraft",
     "Supplier",
     "Article",
 ]

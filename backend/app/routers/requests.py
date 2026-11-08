@@ -369,6 +369,13 @@ def create_request(
     membership: OrganizationMember = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> RequestOut:
+    draft = None
+    if payload.draft_id is not None:
+        from app.routers.drafts import get_own_draft
+
+        draft = get_own_draft(db, payload.draft_id, membership, light=False)
+        if draft is None:
+            raise _unprocessable("Draft not found")
     _validate_commodity_group(db, payload.commodity_group_id)
     _enforce_required_fields(db, membership.organization_id, payload)
     lines = _prepare_lines(payload.order_lines)
@@ -401,6 +408,16 @@ def create_request(
     db.add(request)
     db.flush()
     _log_activity(db, request.id, membership.user_id, "created", "Request created")
+    if draft is not None:
+        if draft.document is not None:
+            _attach_document(
+                db,
+                request.id,
+                membership.user_id,
+                draft.document_filename or "document.pdf",
+                draft.document,
+            )
+        db.delete(draft)
     db.commit()
 
     request = _get_org_request(db, request.id, membership.organization_id)
@@ -573,16 +590,8 @@ def get_activity(
     return [RequestActivityOut.model_validate(a) for a in activity]
 
 
-@router.put("/{request_id}/document", status_code=status.HTTP_204_NO_CONTENT)
-async def upload_document(
-    request_id: uuid.UUID,
-    file: UploadFile,
-    membership: OrganizationMember = Depends(get_current_membership),
-    db: Session = Depends(get_db),
-) -> None:
-    """Attach (or replace) the original PDF for a request."""
-    request = _get_org_request(db, request_id, membership.organization_id)
-
+async def read_pdf_upload(file: UploadFile) -> bytes:
+    """Validate an uploaded PDF (type and size) and return its bytes."""
     if file.content_type not in ("application/pdf", "application/x-pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a PDF file"
@@ -593,23 +602,44 @@ async def upload_document(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="PDF exceeds the 10MB limit",
         )
+    return content
 
+
+def _attach_document(
+    db: Session,
+    request_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    filename: str,
+    content: bytes,
+) -> None:
+    """Create/replace the request's RequestDocument and log it (no commit)."""
     document = db.scalar(
-        select(RequestDocument).where(RequestDocument.request_id == request.id)
+        select(RequestDocument).where(RequestDocument.request_id == request_id)
     )
     if document is None:
-        document = RequestDocument(request_id=request.id)
+        document = RequestDocument(request_id=request_id)
         db.add(document)
-    document.filename = file.filename or "document.pdf"
+    document.filename = filename
     document.content_type = "application/pdf"
     document.content = content
-
     _log_activity(
-        db,
-        request.id,
-        membership.user_id,
-        "document_attached",
-        f"Attached document {document.filename}",
+        db, request_id, actor_id, "document_attached", f"Attached document {filename}"
+    )
+
+
+@router.put("/{request_id}/document", status_code=status.HTTP_204_NO_CONTENT)
+async def upload_document(
+    request_id: uuid.UUID,
+    file: UploadFile,
+    membership: OrganizationMember = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> None:
+    """Attach (or replace) the original PDF for a request."""
+    request = _get_org_request(db, request_id, membership.organization_id)
+
+    content = await read_pdf_upload(file)
+    _attach_document(
+        db, request.id, membership.user_id, file.filename or "document.pdf", content
     )
     db.commit()
 

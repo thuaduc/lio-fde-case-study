@@ -64,6 +64,7 @@ class RequestCreate(BaseModel):
         default=None, alias="fieldSources"
     )
     order_lines: list[OrderLineIn] = Field(alias="orderLines", min_length=1)
+    draft_id: uuid.UUID | None = Field(default=None, alias="draftId")
 
 
 class RequestUpdate(BaseModel):
