@@ -281,6 +281,26 @@ def _line_numbers(ln: LlmLine) -> tuple[float, float, float]:
     return unit_price or 0.0, ln.quantity or 0.0, total
 
 
+def _normalise_line(ln: LlmLine) -> LlmLine:
+    """Fill gaps on lines that only carry a total (shipping, fees, surcharges)."""
+    updates: dict = {}
+    unit_price = ln.unit_price
+    has_adjusted_unit = (
+        ln.list_unit_price is not None and ln.adjustment_percent is not None
+    )
+    if unit_price is None and ln.list_unit_price is not None and not has_adjusted_unit:
+        unit_price = ln.list_unit_price
+        updates["unit_price"] = unit_price
+    if ln.total_price:
+        if has_adjusted_unit:
+            if not ln.quantity:
+                updates["quantity"] = 1
+        elif not ln.quantity or not unit_price:
+            updates["quantity"] = 1
+            updates["unit_price"] = ln.total_price
+    return ln.model_copy(update=updates) if updates else ln
+
+
 def _money(v: float) -> str:
     return f"-${abs(v):,.2f}" if v < 0 else f"${v:,.2f}"
 
@@ -387,6 +407,7 @@ def to_extracted(
 
     out: list[ExtractedLine] = []
     for ln, key in zip(kept, keys):
+        ln = _normalise_line(ln)
         kind = ln.kind  # never "heading" here
         parent_key: str | None = None
         if kind != "item" and ln.parent_position:

@@ -392,6 +392,30 @@ def test_lines_vs_net_warns():
     assert svc.reconcile(lines, 150.0, None, None) == []
 
 
+def test_total_only_shipping_line_normalised():
+    ship = line(position="2", kind="shipping", quantity=None, unit=None,
+                unit_price=None, total_price=215.0)
+    data, w = conv(quote([ship]))
+    ln = data.order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (1, 215.0, 215.0)
+    assert not any("quantity x unit price" in x for x in w)
+
+
+def test_zero_qty_zero_price_with_total_normalised():
+    fee = line(position="3", kind="fee", quantity=0, unit_price=0, total_price=215.0)
+    data, _ = conv(quote([fee]))
+    ln = data.order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (1, 215.0, 215.0)
+
+
+def test_list_price_fallback_when_unit_price_null():
+    l = line(position="1", quantity=3, unit_price=None, list_unit_price=10.0,
+             adjustment_percent=None, total_price=30.0)
+    data, _ = conv(quote([l]))
+    ln = data.order_lines[0]
+    assert (ln.amount, ln.unit_price, ln.total_price) == (3, 10.0, 30.0)
+
+
 def test_line_math_warns():
     l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
     _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
