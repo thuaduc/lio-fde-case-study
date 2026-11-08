@@ -33,7 +33,24 @@ Development happens in the **Acme Corp** organization, which has one of each rol
 | `buyer@acme.com` | buyer | approve requests |
 | `requester@acme.com` | requester | create & track requests |
 
-Every request needs approval by a buyer or admin (see the **Approvals** tab).
+Acme requests below $2,000, including tax, are approved automatically. Requests
+at or above that amount need a buyer or admin (see the **Approvals** tab). Admins
+can change or disable the threshold in Organization settings. A price edit that
+changes an approved request's total re-evaluates its approval.
+
+The PDF form extracts items, discounts, charges and alternatives, with eye
+buttons linking fields, warnings and lines to their source boxes in the PDF.
+Drafts save automatically and can be resumed from Requests. While a request is
+open, you can edit its lines, swap alternatives and apply negotiated catalog
+prices. Catalog price replacement requires equivalent units; the app does not
+convert a whole panel to square feet or infer quantities for an unknown unit.
+
+Commodity groups are assigned per line using your organization's booking
+descriptions. Admins manage these groups in Organization settings. The request's
+primary group is computed from its largest active spend.
+
+Extraction needs a PDF text layer. Scans and image-only header fields (including
+verdeform's EIN) need OCR, which is not implemented; missing values stay empty.
 
 Other tenants exist to show the multi-tenant setup — **Walmart, Schaeffler,
 Siemens, BMW** — each with an admin at `admin@<company>.com` (same password).
