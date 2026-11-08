@@ -46,10 +46,10 @@ def test_rows_carry_word_positions(quote_bytes):
 
 def test_row_segments_split_on_wide_gaps(quote_bytes):
     layout = extract_layout(quote_bytes(HOLLIS))
-    row = next(r for r in layout.rows if "Moss panel" in r.text)
+    row = next(r for r in layout.rows if "askLio" in r.text)
     segs = row_segments(row)
     assert len(segs) > 1
-    assert any(s.startswith("Moss panel") for s in segs)
+    assert 'Moss panel "70:30" with "askLio"' in segs
 
 
 def test_blank_pdf_has_no_rows():

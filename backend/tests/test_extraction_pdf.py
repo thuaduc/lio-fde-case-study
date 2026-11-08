@@ -277,3 +277,122 @@ def test_endpoint_happy_path(monkeypatch, db, rows_layout):
     assert r.status_code == 200 and body["success"]
     assert body["data"]["orderLines"][0]["key"] == "1"
     assert body["data"]["vatId"] == "12-3456789"
+
+
+# --- source boxes, price verification, reconciliation ---------------------------
+
+from app.schemas.extraction import ExtractedLine  # noqa: E402
+from app.services.pdf_layout import Word  # noqa: E402
+
+
+def mkrow(rid, text, page=1, y0=0.1, y1=0.12, words=None, cw=0.01):
+    return PdfRow(id=rid, page=page, text=text,
+                  box=Box(page=page, x0=0.1, y0=y0, x1=0.9, y1=y1),
+                  words=words or [], char_width=cw)
+
+
+def lay(*rows):
+    return PdfLayout(rows=list(rows), page_count=3)
+
+
+def test_unknown_row_ids_ignored():
+    l = line(position="1", source_rows=["nope", "also-nope"])
+    assert svc.resolve_sources(l, lay(mkrow("a", "x 1.00"))) == ([], None, False)
+    l2 = line(position="1", source_rows=[])
+    assert svc.resolve_sources(l2, lay()) == ([], None, False)
+    data, _ = svc.to_extracted(quote([l]), lay(), GROUPS)
+    assert data.order_lines[0].sources == [] and data.order_lines[0].source_text is None
+
+
+def test_source_text_is_longest_segment_with_letters():
+    words = [Word(text="1.1", x0=0.1, x1=0.13), Word(text="Moss", x0=0.2, x1=0.24),
+             Word(text="panel", x0=0.25, x1=0.3), Word(text="715.26", x0=0.8, x1=0.9)]
+    row = mkrow("a", "1.1 Moss panel 715.26", words=words, cw=0.01)
+    boxes, text, _ = svc.resolve_sources(line(source_rows=["a"]), lay(row))
+    assert text == "Moss panel" and len(boxes) == 1
+    # first valid row without a 3-letter segment -> None
+    num = mkrow("n", "1 2", words=[Word(text="1", x0=0.1, x1=0.11)])
+    assert svc.resolve_sources(line(source_rows=["n"]), lay(num))[1] is None
+
+
+def test_source_text_is_description_segment(quote_bytes):
+    from app.services.pdf_layout import extract_layout
+    from tests.test_pdf_layout import HOLLIS
+    layout = extract_layout(quote_bytes(HOLLIS))
+    row = next(r for r in layout.rows if "askLio" in r.text)
+    _, text, _ = svc.resolve_sources(line(source_rows=[row.id]), layout)
+    assert text == 'Moss panel "70:30" with "askLio"'
+
+
+def test_boxes_merge_adjacent_rows_per_page():
+    r1 = mkrow("a", "x", y0=0.10, y1=0.12)
+    r2 = mkrow("b", "y", y0=0.125, y1=0.145)   # adjacent
+    r3 = mkrow("c", "z", y0=0.50, y1=0.52)     # far away
+    r4 = mkrow("d", "w", page=2, y0=0.13, y1=0.15)  # other page
+    boxes, _, _ = svc.resolve_sources(line(source_rows=["a", "b", "c", "d"]),
+                                      lay(r1, r2, r3, r4))
+    assert [(b.page, b.y0, b.y1) for b in boxes] == [
+        (1, 0.10, 0.145), (1, 0.50, 0.52), (2, 0.13, 0.15)]
+
+
+@pytest.mark.parametrize("text", ["Panel 1,560.00", "Panel $1,560.00", "Panel 1560.00"])
+def test_price_verified_formats(text):
+    l = line(position="1", total_price=1560.0, quantity=None, source_rows=["a"])
+    assert svc.resolve_sources(l, lay(mkrow("a", text)))[2] is True
+
+
+def test_price_verified_when_total_in_rows():
+    l = line(position="1", quantity=2, list_unit_price=894.08, adjustment_percent=-20,
+             total_price=None, source_rows=["a"])
+    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 715.26")))[2] is True  # unit price
+    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 1,430.52")))[2] is True  # total
+    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 999.00")))[2] is False
+
+
+def test_unverified_price_warns():
+    l = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
+             source_rows=["a"])
+    _, w = svc.to_extracted(quote([l]), lay(mkrow("a", "Panel 999.00")), GROUPS)
+    assert "Couldn't find line 2's price ($715.26) in the document" in w
+    l2 = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
+              source_rows=["a"])
+    _, w2 = svc.to_extracted(quote([l2]), lay(mkrow("a", "Panel 715.26")), GROUPS)
+    assert not any("Couldn't find" in x for x in w2)
+    z = line(position="3", quantity=0, unit_price=0, total_price=0)
+    _, w3 = svc.to_extracted(quote([z]), lay(), GROUPS)
+    assert not any("Couldn't find" in x for x in w3)
+
+
+def el(key, total, kind="item", parent=None):
+    return ExtractedLine(key=key, parent_key=parent, kind=kind, position_description="",
+                         unit_price=total, amount=1, unit="", total_price=total)
+
+
+def test_lines_vs_net_warns():
+    lines = [el("1", 100), el("2", 50), el("3", 900, kind="optional"),
+             el("4", -5, kind="discount", parent="3")]
+    w = svc.reconcile(lines, 160.0, None, None)
+    assert w == ["Line items add up to $150.00 but the quote's net total is $160.00"]
+    assert svc.reconcile(lines, 150.0, None, None) == []
+
+
+def test_line_math_warns():
+    l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
+    _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
+    assert any("line 1" in x.lower() and "$45.00" in x and "$30.00" in x for x in w)
+    ok = line(position="1", quantity=3, unit_price=10.0, total_price=30.0)
+    _, w2 = svc.to_extracted(quote([ok]), lay(), GROUPS)
+    assert not any("quantity" in x for x in w2)
+
+
+def test_net_plus_tax_vs_grand_warns():
+    w = svc.reconcile([el("1", 100)], 100.0, 8.0, 110.0)
+    assert w == ["Net total $100.00 plus tax $8.00 is $108.00 but the quote's grand total is $110.00"]
+    assert svc.reconcile([el("1", 100)], 100.0, 8.0, 108.0) == []
+
+
+def test_none_totals_no_crash():
+    assert svc.reconcile([], None, None, None) == []
+    assert svc.reconcile([el("1", 5)], None, 1.0, None) == []
+    assert svc.reconcile([el("1", 5)], 5.0, None, 9.0) == []
+    assert svc.reconcile([el("1", 5)], None, None, 9.0) == []

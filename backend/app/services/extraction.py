@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from collections import Counter
 
 import openai
@@ -16,7 +17,13 @@ from app.schemas.extraction import (
     LlmLine,
     LlmQuote,
 )
-from app.services.pdf_layout import PdfLayout, extract_layout, layout_to_prompt_text
+from app.services.pdf_layout import (
+    Box,
+    PdfLayout,
+    extract_layout,
+    layout_to_prompt_text,
+    row_segments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +281,115 @@ def _line_numbers(ln: LlmLine) -> tuple[float, float, float]:
     return unit_price or 0.0, ln.quantity or 0.0, total
 
 
+def _money(v: float) -> str:
+    return f"-${abs(v):,.2f}" if v < 0 else f"${v:,.2f}"
+
+
+def _tol(ref: float) -> float:
+    return max(0.01, 0.005 * abs(ref)) + 1e-9
+
+
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _numbers(text: str) -> list[float]:
+    out: list[float] = []
+    for m in _NUMBER_RE.findall(text):
+        try:
+            out.append(float(m.replace(",", "")))
+        except ValueError:
+            continue
+    return out
+
+
+def _merge_boxes(rows: list) -> list[Box]:
+    """Union vertically adjacent row boxes per page (gap < 1.5 row heights)."""
+    boxes: list[Box] = []
+    for page in sorted({r.page for r in rows}):
+        group = sorted((r.box for r in rows if r.page == page), key=lambda b: b.y0)
+        cur: Box | None = None
+        height = 0.0
+        for b in group:
+            if cur is not None and b.y0 - cur.y1 < 1.5 * height:
+                cur = Box(page=page, x0=min(cur.x0, b.x0), y0=min(cur.y0, b.y0),
+                          x1=max(cur.x1, b.x1), y1=max(cur.y1, b.y1))
+            else:
+                if cur is not None:
+                    boxes.append(cur)
+                cur = b.model_copy()
+            height = b.y1 - b.y0
+        if cur is not None:
+            boxes.append(cur)
+    return boxes
+
+
+def resolve_sources(
+    line: LlmLine, layout: PdfLayout
+) -> tuple[list[Box], str | None, bool]:
+    """(merged boxes, source_text, price verified) from the line's cited rows."""
+    by_id = {r.id: r for r in layout.rows}
+    rows = []
+    for rid in line.source_rows:
+        row = by_id.get(rid)
+        if row is not None and row not in rows:
+            rows.append(row)
+    if not rows:
+        return [], None, False
+
+    source_text: str | None = None
+    for row in rows:
+        segs = [s for s in row_segments(row) if sum(c.isalpha() for c in s) >= 3]
+        if segs:
+            source_text = max(segs, key=len)
+            break
+
+    unit_price, _, total = _line_numbers(line)
+    targets = [abs(v) for v in (total, unit_price) if v]
+    found = [n for r in rows for n in _numbers(r.text)]
+    verified = any(abs(n - t) <= _tol(t) for t in targets for n in found)
+    return _merge_boxes(rows), source_text, verified
+
+
+def _active_keys(lines: list[ExtractedLine]) -> set[str]:
+    by_key = {ln.key: ln for ln in lines}
+
+    def active(ln: ExtractedLine, seen: frozenset[str] = frozenset()) -> bool:
+        if ln.kind in ACTIVE_EXCLUDED:
+            return False
+        if ln.parent_key is None or ln.key in seen or ln.parent_key not in by_key:
+            return True
+        return active(by_key[ln.parent_key], seen | {ln.key})
+
+    return {ln.key for ln in lines if active(ln)}
+
+
+def reconcile(
+    lines: list[ExtractedLine],
+    net_total: float | None,
+    tax_total: float | None,
+    grand_total: float | None,
+) -> list[str]:
+    """Warnings where the quote's stated totals disagree with its lines."""
+    warnings: list[str] = []
+    if net_total is not None:
+        keys = _active_keys(lines)
+        computed = _round(sum(ln.total_price for ln in lines if ln.key in keys))
+        if abs(computed - net_total) > _tol(net_total):
+            warnings.append(
+                f"Line items add up to {_money(computed)} but the quote's net "
+                f"total is {_money(net_total)}"
+            )
+    if net_total is not None and tax_total is not None and grand_total is not None:
+        expected = _round(net_total + tax_total)
+        if abs(expected - grand_total) > _tol(grand_total):
+            warnings.append(
+                f"Net total {_money(net_total)} plus tax {_money(tax_total)} is "
+                f"{_money(expected)} but the quote's grand total is "
+                f"{_money(grand_total)}"
+            )
+    return warnings
+
+
 def to_extracted(
     q: LlmQuote, layout: PdfLayout, groups: dict[int, str]
 ) -> tuple[ExtractedVendorData, list[str]]:
@@ -298,6 +414,18 @@ def to_extracted(
         if kind == "alternative" and parent_key is None:
             kind = "optional"
         unit_price, amount, total = _line_numbers(ln)
+        if ln.total_price is not None and ln.quantity and unit_price:
+            expected = _round(ln.quantity * unit_price)
+            if abs(abs(ln.total_price) - abs(expected)) > _tol(expected):
+                warnings.append(
+                    f"Line {key}: total {_money(ln.total_price)} doesn't match "
+                    f"quantity x unit price ({_money(expected)})"
+                )
+        boxes, source_text, verified = resolve_sources(ln, layout)
+        if total and not verified:
+            warnings.append(
+                f"Couldn't find line {key}'s price ({_money(total)}) in the document"
+            )
         out.append(
             ExtractedLine(
                 key=key,
@@ -312,30 +440,23 @@ def to_extracted(
                 total_price=total,
                 list_unit_price=ln.list_unit_price,
                 adjustment_percent=ln.adjustment_percent,
+                sources=boxes,
+                source_text=source_text,
             )
         )
-
-    # Task 3 hook: resolve_sources(out, kept, layout) fills `sources`/`sourceText`
-    # from each LlmLine.source_rows here.
 
     for charge in q.unpriced_charges:
         warnings.append(f"Quote mentions a charge without an amount: {charge}")
 
-    by_key = {ln.key: ln for ln in out}
-
-    def active(ln: ExtractedLine, seen: frozenset[str] = frozenset()) -> bool:
-        if ln.kind in ACTIVE_EXCLUDED:
-            return False
-        if ln.parent_key is None or ln.key in seen:
-            return True
-        return active(by_key[ln.parent_key], seen | {ln.key})
-
-    computed = _round(sum(ln.total_price for ln in out if active(ln)))
+    keys_active = _active_keys(out)
+    computed = _round(sum(ln.total_price for ln in out if ln.key in keys_active))
     tax = q.tax_total
     net = q.net_total if q.net_total is not None else computed
     total_cost = (
         q.grand_total if q.grand_total is not None else _round(computed + (tax or 0))
     )
+
+    warnings.extend(reconcile(out, q.net_total, tax, q.grand_total))
 
     group_id = q.commodity_group_id if q.commodity_group_id in groups else None
     data = ExtractedVendorData(
