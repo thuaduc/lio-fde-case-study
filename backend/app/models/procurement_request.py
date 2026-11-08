@@ -132,6 +132,7 @@ class OrderLine(Base, CreatedAtMixin):
     )
     sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
     source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_quote: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     article_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), nullable=True
     )

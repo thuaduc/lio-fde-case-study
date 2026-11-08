@@ -8,7 +8,7 @@ import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
-import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
+import CatalogSuggestion, { applyArticle, restoreArticle } from '@/components/CatalogSuggestion';
 import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import {
@@ -614,11 +614,14 @@ export default function NewRequestPage() {
               <CatalogSuggestion
                 line={line}
                 editable
+                onRestore={() => {
+                  setOrderLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
+                }}
                 suggestions={catalog[line.key]}
                 applied={line.articleId ? appliedArticles[line.articleId] : undefined}
-                onApply={(s) => {
+                onApply={(s, amount) => {
                   setAppliedArticles((a) => ({ ...a, [s.articleId]: s }));
-                  setOrderLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s) : l)));
+                  setOrderLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s, amount) : l)));
                 }}
               />
             )}

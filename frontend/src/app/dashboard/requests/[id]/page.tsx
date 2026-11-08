@@ -10,7 +10,7 @@ import type { ProcurementRequestWithDetails } from '@/types/database';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
-import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
+import CatalogSuggestion, { applyArticle, restoreArticle } from '@/components/CatalogSuggestion';
 import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import {
@@ -389,12 +389,17 @@ export default function RequestDetailPage() {
               renderLineExtra={(line) => (
                 <CatalogSuggestion
                   line={line}
+                  currency={request.currency || 'USD'}
                   editable={linesEditable}
+                  onRestore={() => {
+                    setLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
+                    setLinesDirty(true);
+                  }}
                   suggestions={catalog[line.key]}
                   applied={line.articleId ? appliedArticles[line.articleId] : undefined}
-                  onApply={(s) => {
+                  onApply={(s, amount) => {
                     setAppliedArticles((a) => ({ ...a, [s.articleId]: s }));
-                    setLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s) : l)));
+                    setLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s, amount) : l)));
                     setLinesDirty(true);
                   }}
                 />

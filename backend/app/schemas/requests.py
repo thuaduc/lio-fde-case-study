@@ -22,6 +22,16 @@ ApprovalStatus = Literal["pending", "approved", "rejected"]
 # Inputs (camelCase — matches what the frontend forms already send)
 # ---------------------------------------------------------------------------
 
+class OriginalQuote(BaseModel):
+    positionDescription: str
+    unitPrice: float
+    amount: float
+    unit: str
+    vendorItemNumber: str | None = None
+    listUnitPrice: float | None = None
+    adjustmentPercent: float | None = None
+
+
 class OrderLineIn(BaseModel):
     """An order line. Accepts an ``ExtractedLine``'s JSON unchanged.
 
@@ -45,6 +55,7 @@ class OrderLineIn(BaseModel):
     adjustment_percent: float | None = Field(default=None, alias="adjustmentPercent")
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, alias="sourceText")
+    original_quote: OriginalQuote | None = Field(default=None, alias="originalQuote")
     article_id: uuid.UUID | None = Field(default=None, alias="articleId")
     # The org's group for this line. Adjustments with a parent and no group
     # take the parent's group on save.
@@ -168,6 +179,7 @@ class OrderLineOut(BaseModel):
     )
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, serialization_alias="sourceText")
+    original_quote: OriginalQuote | None = Field(default=None, serialization_alias="originalQuote")
     article_id: uuid.UUID | None = Field(default=None, serialization_alias="articleId")
     commodity_group_id: int | None = Field(
         default=None, serialization_alias="commodityGroupId"

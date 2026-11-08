@@ -21,6 +21,7 @@ from app.models import (
 from app.schemas.requests import (
     ApprovalDecision,
     OrderLineIn,
+    OriginalQuote,
     RequestActivityOut,
     RequestCreate,
     RequestOut,
@@ -317,6 +318,7 @@ def _order_lines_signature(lines) -> list[tuple]:
             _num(line.adjustment_percent, 3),
             _json_sources(line.sources),
             line.source_text,
+            line.original_quote.model_dump() if line.original_quote else None,
             str(line.article_id) if line.article_id else None,
             line.commodity_group_id,
         )
@@ -343,6 +345,7 @@ class _StoredLine:
             adjustment_percent=row.adjustment_percent,
             sources=row.sources,
             source_text=row.source_text,
+            original_quote=OriginalQuote.model_validate(row.original_quote) if row.original_quote else None,
             article_id=row.article_id,
             commodity_group_id=row.commodity_group_id,
         )
@@ -458,6 +461,7 @@ def _build_lines(lines: list[OrderLineIn]) -> list[OrderLine]:
             adjustment_percent=line.adjustment_percent,
             sources=[b.model_dump() for b in line.sources],
             source_text=line.source_text,
+            original_quote=line.original_quote.model_dump() if line.original_quote else None,
             article_id=line.article_id,
             commodity_group_id=line.commodity_group_id,
         )

@@ -53,8 +53,11 @@ total links to the quote's printed grand total, and the primary commodity group
 to the lines booked to it.
 Drafts save automatically and can be resumed from Requests. Until a request is
 closed, you can edit its lines, swap alternatives and apply negotiated catalog
-prices. Catalog price replacement requires equivalent units; the app does not
-convert a whole panel to square feet or infer quantities for an unknown unit.
+prices. Every editable item has a **Replace from catalog** picker with search and supplier filtering.
+Review one line at a time; changing units requires a new quantity. The saved
+request links to the catalog article, and **Restore quoted item** restores the
+original values even after reloading. Catalog replacements use the request
+currency; the app does not convert currencies or infer quantities across units.
 
 Commodity groups are assigned per line using your organization's booking
 descriptions. Admins manage these groups in Organization settings. The request's

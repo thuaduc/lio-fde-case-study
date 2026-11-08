@@ -96,6 +96,16 @@ export interface SourceBox {
   y1: number;
 }
 
+export interface OriginalQuote {
+  positionDescription: string;
+  unitPrice: number;
+  amount: number;
+  unit: string;
+  vendorItemNumber?: string | null;
+  listUnitPrice?: number | null;
+  adjustmentPercent?: number | null;
+}
+
 export interface OrderLineInput {
   positionDescription: string;
   unitPrice: number;
@@ -113,6 +123,7 @@ export interface OrderLineInput {
   sources?: SourceBox[];
   sourceText?: string | null;
   articleId?: string | null;
+  originalQuote?: OriginalQuote | null;
   /** The org's commodity group for this line (per-line booking). */
   commodityGroupId?: number | null;
 }
@@ -429,6 +440,9 @@ export interface LineSuggestions {
 }
 
 export const articles = {
+  get(id: string): Promise<Article> {
+    return apiFetch(`/articles/${encodeURIComponent(id)}`);
+  },
   /** Negotiated catalog articles matching each line (max 3 per line, cheapest first). */
   suggestions(
     lines: { description: string; unit?: string | null; unitPrice?: number | null; vendorItemNumber?: string | null }[],

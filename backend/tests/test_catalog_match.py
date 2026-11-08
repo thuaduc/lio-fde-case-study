@@ -455,3 +455,16 @@ def test_upsert_tolerates_existing_row(client, monkeypatch, old_model):
         assert row.model == settings.openai_embedding_model
         assert row.embedding == [1.0, 2.0]
         assert db.scalar(select(func.count()).select_from(ArticleEmbedding)) == 1
+
+
+def test_article_detail_is_org_scoped(client, org):
+    headers, _ = org
+    article = client.get('/articles', headers=headers).json()['items'][0]
+    response = client.get(f"/articles/{article['id']}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()['article_number'] == article['article_number']
+    assert response.json()['supplier_name'] == article['supplier_name']
+    other_headers, _ = make_org(client)
+    assert client.get(f"/articles/{article['id']}", headers=other_headers).status_code == 404
+    assert client.get(f"/articles/{article['id']}").status_code == 401
+    assert client.get(f'/articles/{uuid.uuid4()}', headers=headers).status_code == 404

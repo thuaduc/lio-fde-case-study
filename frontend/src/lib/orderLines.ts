@@ -185,6 +185,7 @@ export const linesFromRequest = (req: ProcurementRequestWithDetails): Line[] =>
       sources: l.sources ?? [],
       sourceText: l.sourceText ?? null,
       articleId: l.articleId ?? null,
+      originalQuote: l.originalQuote ?? null,
       commodityGroupId: l.commodityGroupId ?? null,
     })),
   );

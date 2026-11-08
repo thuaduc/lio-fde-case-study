@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -120,3 +122,20 @@ def suggest_articles(
         )
         for i, suggestions in enumerate(results)
     ]
+
+
+@router.get("/{article_id}", response_model=ArticleOut)
+def get_article(
+    article_id: uuid.UUID,
+    membership: OrganizationMember = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> ArticleOut:
+    article = db.scalar(select(Article).where(
+        Article.id == article_id,
+        Article.organization_id == membership.organization_id,
+    ).options(joinedload(Article.supplier)))
+    if article is None:
+        raise HTTPException(status_code=404, detail="Catalog article not found")
+    return ArticleOut.model_validate(article).model_copy(update={
+        "supplier_name": article.supplier.name if article.supplier else None,
+    })

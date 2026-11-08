@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import RequestActivity
+from app.models import RequestActivity, Article, Supplier
 from app.seed import seed
 
 engine = create_engine(
@@ -416,3 +416,40 @@ def test_legacy_string_warnings_in_db_load_as_objects(client, auth):
     got = client.get(f"/requests/{body['id']}", headers=auth).json()
     assert got["extractionWarnings"] == [
         {"message": "old string", "sources": []}, {"message": "new", "sources": [BOX]}]
+
+
+def test_catalog_replacement_survives_reload_and_restores_quote(client, auth):
+    org_id = uuid.UUID(client.get('/organizations/me', headers=auth).json()['id'])
+    with Session() as db:
+        supplier = Supplier(organization_id=org_id, name='Catalog supplier')
+        db.add(supplier)
+        db.flush()
+        db.add(Article(organization_id=org_id, supplier_id=supplier.id,
+                       article_number='PANEL-1', description='Framed moss panel',
+                       unit_price=320, unit='piece', currency='USD', quantity=1))
+        db.commit()
+    article = client.get('/articles', headers=auth).json()['items'][0]
+    original = {'positionDescription': 'Quoted panel', 'unitPrice': 52.0,
+                'amount': 13.78, 'unit': 'sq ft', 'vendorItemNumber': 'QUOTE-1',
+                'listUnitPrice': None, 'adjustmentPercent': None}
+    replacement = line('L1', positionDescription=article['description'],
+                       unitPrice=float(article['unit_price']), amount=2,
+                       unit=article['unit'], articleId=article['id'],
+                       vendorItemNumber=article['article_number'], originalQuote=original)
+    r = create(client, auth, [replacement])
+    assert r.status_code == 201, r.text
+    rid = r.json()['id']
+    stored = client.get(f'/requests/{rid}', headers=auth).json()['order_lines'][0]
+    assert stored['articleId'] == article['id']
+    assert stored['originalQuote'] == original
+    assert stored['total_price'] == round(2 * float(article['unit_price']), 2)
+    # Saving again exercises change detection against a persisted snapshot.
+    assert put(client, auth, rid, [replacement]).status_code == 200
+    restored = line('L1', **original, articleId=None, originalQuote=None)
+    r = put(client, auth, rid, [restored])
+    assert r.status_code == 200, r.text
+    stored = client.get(f'/requests/{rid}', headers=auth).json()['order_lines'][0]
+    assert stored['articleId'] is None
+    assert stored['originalQuote'] is None
+    assert stored['position_description'] == 'Quoted panel'
+    assert stored['total_price'] == 716.56
