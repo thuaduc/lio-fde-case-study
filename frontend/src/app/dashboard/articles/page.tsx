@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import * as api from '@/lib/api';
 import type { ArticlePage } from '@/lib/api';
 import { Input, Alert } from '@/components/base';
@@ -129,7 +130,7 @@ export default function ArticlesPage() {
                 {items.map((a) => (
                   <tr key={a.id} className="hover:bg-ink-800/[0.02]">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-ink/70">
-                      {a.article_number}
+                      <Link href={`/dashboard/articles/${a.id}`} className="text-accent-deep underline underline-offset-2">{a.article_number}</Link>
                     </td>
                     <td className="px-6 py-4 text-sm text-ink max-w-md">{a.description}</td>
                     <td className="px-6 py-4 whitespace-nowrap">

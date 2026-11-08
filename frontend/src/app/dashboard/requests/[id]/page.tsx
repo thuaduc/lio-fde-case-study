@@ -1,12 +1,27 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import type { ProcurementRequestWithDetails } from '@/types/database';
+import OrderLinesEditor from '@/components/OrderLinesEditor';
+import SourceButton from '@/components/SourceButton';
+import WarningList, { normalizeWarnings } from '@/components/WarningList';
+import CatalogSuggestion, { applyArticle, restoreArticle } from '@/components/CatalogSuggestion';
+import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
+import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
+import {
+  type Line,
+  linesForSave,
+  groupSources,
+  linesFromRequest as toEditorLines,
+  missingGroupError,
+  primaryGroupId,
+} from '@/lib/orderLines';
+import { approvalLabel } from '@/lib/approval';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -25,6 +40,8 @@ const usd = (n: number | null) =>
 export default function RequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const currentRequestId = useRef(id);
+  currentRequestId.current = id;
   const { data: commodityGroups } = useCommodityGroups();
 
   const [request, setRequest] = useState<ProcurementRequestWithDetails | null>(null);
@@ -36,6 +53,28 @@ export default function RequestDetailPage() {
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [taxTotal, setTaxTotal] = useState(0);
+  const [linesDirty, setLinesDirty] = useState(false);
+  const docPanel = useRef<DocumentPanelHandle>(null);
+  const linesEditable = !!request && request.status !== 'closed' && !busy && !editing;
+  const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(lines, linesEditable);
+  const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
+
+  /** Click handler that highlights one header field, when its location is known. */
+  const showField = (key: keyof api.FieldSources) => {
+    const boxes = request?.fieldSources?.[key] ?? [];
+    return pdfUrl && boxes.length > 0
+      ? () => docPanel.current?.showSource({ sources: boxes })
+      : undefined;
+  };
+
+  const adopt = (req: ProcurementRequestWithDetails) => {
+    setRequest(req);
+    setLines(toEditorLines(req));
+    setTaxTotal(req.taxTotal ?? 0);
+    setLinesDirty(false);
+  };
 
   // Edit form state
   const [form, setForm] = useState({
@@ -43,26 +82,34 @@ export default function RequestDetailPage() {
     commodityGroupId: null as number | null, totalCost: 0,
   });
 
-  const load = async () => {
+  const load = async (isCurrent: () => boolean) => {
     try {
       const [req, org, acts] = await Promise.all([
         api.requests.get(id),
         api.organizations.getMine(),
         api.requests.getActivity(id),
       ]);
-      setRequest(req);
+      if (!isCurrent()) return;
+      adopt(req);
       setRole(org.role);
       setActivity(acts);
       const url = await api.requests.documentUrl(id).catch(() => null);
+      if (!isCurrent()) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
       setPdfUrl(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load request');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to load request');
     }
-    setLoading(false);
+    if (isCurrent()) setLoading(false);
   };
 
   useEffect(() => {
-    load();
+    let active = true;
+    setLoading(true); setEditing(false); setError('');
+    load(() => active);
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -78,7 +125,8 @@ export default function RequestDetailPage() {
       api.requests.get(id),
       api.requests.getActivity(id),
     ]);
-    setRequest(req);
+    if (currentRequestId.current !== id) return;
+    adopt(req);
     setActivity(acts);
   };
 
@@ -132,31 +180,71 @@ export default function RequestDetailPage() {
     setEditing(true);
   };
 
+  /** Full update payload: header fields from `header`, lines + tax from the editor. */
+  const updatePayload = (header: typeof form, editorLines: Line[], tax: number) => ({
+    requestorName: header.requestorName,
+    title: header.title,
+    vendorName: header.vendorName,
+    vatId: header.vatId,
+    // Groups are booked per line; the server derives the request's from them.
+    commodityGroupId: primaryGroupId(editorLines) ?? header.commodityGroupId ?? null,
+    totalCost: header.totalCost,
+    department: header.department,
+    taxTotal: tax,
+    fieldSources: request?.fieldSources ?? null,
+    extractionWarnings: request ? normalizeWarnings(request.extractionWarnings) : null,
+    quoteNumber: request?.quoteNumber ?? null,
+    validUntil: request?.validUntil ?? null,
+    orderLines: linesForSave(editorLines),
+  });
+
+  const headerFromRequest = () => ({
+    requestorName: request!.requestor_name,
+    title: request!.title,
+    vendorName: request!.vendor_name,
+    vatId: request!.vat_id || '',
+    department: request!.department || '',
+    commodityGroupId: request!.commodity_group_id,
+    totalCost: request!.total_cost || 0,
+  });
+
   const saveEdit = async () => {
-    if (!request) return;
+    if (!request || busy) return;
     setBusy(true); setError(''); setSuccess('');
     try {
-      await api.requests.update(id, {
-        requestorName: form.requestorName,
-        title: form.title,
-        vendorName: form.vendorName,
-        vatId: form.vatId,
-        commodityGroupId: form.commodityGroupId || 0,
-        totalCost: form.totalCost,
-        department: form.department,
-        orderLines: (request.order_lines || []).map((l) => ({
-          positionDescription: l.position_description,
-          unitPrice: l.unit_price,
-          amount: l.amount,
-          unit: l.unit,
-          totalPrice: l.total_price,
-        })),
-      });
+      // Send the stored lines back unchanged (all rich fields included).
+      await api.requests.update(id, updatePayload(form, toEditorLines(request), request.taxTotal ?? 0));
       setEditing(false);
       setSuccess('Request updated.');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update request');
+    }
+    setBusy(false);
+  };
+
+  const saveLines = async () => {
+    if (!request || busy) return;
+    setError(''); setSuccess('');
+    const groupError = missingGroupError(linesForSave(lines));
+    if (groupError) {
+      setError(groupError);
+      return;
+    }
+    setBusy(true);
+    try {
+      const wasApproved = request.approval_status === 'approved';
+      const saved = await api.requests.update(id, updatePayload(headerFromRequest(), lines, taxTotal));
+      await refresh();
+      setSuccess(
+        saved.auto_approved && !request.auto_approved
+          ? 'Lines saved. The new total is below the approval threshold, so the request was approved automatically.'
+          : wasApproved && saved.approval_status === 'pending'
+            ? 'Lines saved. The total changed, so the request is open and pending approval again.'
+            : 'Lines saved.',
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save lines');
     }
     setBusy(false);
   };
@@ -183,6 +271,17 @@ export default function RequestDetailPage() {
   }
 
   const canApprove = (role === 'buyer' || role === 'admin') && request.approval_status === 'pending';
+  // The threshold that applied when the request was auto-approved (newest entry).
+  const autoApprovedAt = request.auto_approved
+    ? activity.find((a) => a.action === 'auto_approved')?.detail?.threshold
+    : undefined;
+  const autoThreshold = typeof autoApprovedAt === 'number' ? autoApprovedAt : null;
+  const showTitle = showField('title');
+  const showTotal = showField('totalCost');
+  const primaryGroupBoxes = groupSources(toEditorLines(request), request.commodity_group_id);
+  const showPrimaryGroup = pdfUrl && primaryGroupBoxes.length > 0
+    ? () => docPanel.current?.showSource({ sources: primaryGroupBoxes })
+    : undefined;
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -193,25 +292,31 @@ export default function RequestDetailPage() {
       {/* Header */}
       <div className="mt-3 mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink">{request.title}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-semibold tracking-tight text-ink">{request.title}</h1>
+            {showTitle && <SourceButton className="h-7 w-7" label="Show title in document" onClick={showTitle} />}
+          </div>
           <div className="flex items-center gap-2 mt-2">
             <span className={`inline-flex px-2.5 py-1 text-xs font-semibold rounded-full ${STATUS_BADGE[request.status]}`}>
               {titleCase(request.status)}
             </span>
             <span className={`inline-flex px-2.5 py-1 text-xs font-semibold rounded-full ${APPROVAL_BADGE[request.approval_status]}`}>
-              {titleCase(request.approval_status)}
+              {approvalLabel(request)}
             </span>
+            {autoThreshold !== null && (
+              <span className="text-sm text-ink/55">below the {usd(autoThreshold)} threshold</span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {canApprove && (
             <>
-              <Button size="sm" onClick={() => decide('approved')} disabled={busy}>Approve</Button>
+              <Button size="sm" onClick={() => decide('approved')} disabled={busy || linesDirty || editing}>Approve</Button>
               <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50"
-                onClick={() => decide('rejected')} disabled={busy}>Reject</Button>
+                onClick={() => decide('rejected')} disabled={busy || linesDirty || editing}>Reject</Button>
             </>
           )}
-          <Button size="sm" variant="outline" onClick={openEdit} disabled={busy}>Edit</Button>
+          <Button size="sm" variant="outline" onClick={openEdit} disabled={busy || linesDirty}>Edit</Button>
           <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50"
             onClick={remove} disabled={busy}>Delete</Button>
         </div>
@@ -227,7 +332,7 @@ export default function RequestDetailPage() {
           <button
             key={s}
             onClick={() => changeStatus(s)}
-            disabled={busy || request.status === s}
+            disabled={busy || linesDirty || editing || request.status === s}
             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors disabled:opacity-100 ${
               request.status === s
                 ? 'bg-ink text-white'
@@ -245,35 +350,90 @@ export default function RequestDetailPage() {
           <div className="lio-card p-6">
             <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Details</h2>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-              <Field label="Requestor" value={request.requestor_name} />
-              <Field label="Department" value={request.department || '—'} />
-              <Field label="Vendor" value={request.vendor_name} />
-              <Field label="Tax ID" value={request.vat_id || '—'} />
+              <Field label="Requestor" value={request.requestor_name} onShow={showField('requestorName')} />
+              <Field label="Department" value={request.department || '—'} onShow={showField('department')} />
+              <Field label="Vendor" value={request.vendor_name} onShow={showField('vendorName')} />
+              <Field label="Tax ID" value={request.vat_id || '—'} onShow={showField('vatId')} />
+              <Field label="Quote number" value={request.quoteNumber || '—'} onShow={showField('quoteNumber')} />
               <Field
-                label="Commodity Group"
+                onShow={showField('validUntil')}
+                label="Valid until"
+                value={request.validUntil ? new Date(`${request.validUntil}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}
+              />
+              <Field
+                label="Primary commodity group"
+                onShow={showPrimaryGroup}
+                showLabel="Show the lines booked to this group in document"
                 value={request.commodity_groups
                   ? `${request.commodity_groups.category} · ${request.commodity_groups.name}`
                   : '—'}
               />
-              <Field label="Total Cost" value={usd(request.total_cost)} />
+              <Field label="Total Cost" value={usd(request.total_cost)} onShow={showTotal}
+                showLabel="Show quoted total in document" />
             </dl>
           </div>
 
           <div className="lio-card p-6">
-            <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Order Lines</h2>
-            <div className="space-y-2">
-              {request.order_lines?.map((line, i) => (
-                <div key={line.id} className="flex justify-between items-start bg-ink-800/[0.02] rounded-lg p-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
-                    <p className="text-sm text-ink/55 mt-0.5">
-                      {line.amount} {line.unit} × {usd(line.unit_price)}
-                    </p>
-                  </div>
-                  <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold tracking-tight text-ink">Order Lines</h2>
+              {linesDirty && (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => adopt(request)}>
+                    Discard
+                  </Button>
+                  <Button size="sm" loading={busy} disabled={busy} onClick={saveLines}>
+                    Save lines
+                  </Button>
                 </div>
-              ))}
+              )}
             </div>
+            {linesDirty && request.approval_status === 'approved' && (
+              <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                This request is approved. If saving changes the total, it goes back to Open and pending
+                approval unless the new total is below your organization&apos;s approval threshold.
+              </p>
+            )}
+            {catalogLoading && (
+              <p className="mb-3 text-sm text-ink/45">Looking for matching catalog articles…</p>
+            )}
+            <OrderLinesEditor
+              renderLineExtra={(line, isEditing) => (
+                <CatalogSuggestion
+                  line={line}
+                  currency={request.currency || 'USD'}
+                  editable={linesEditable && isEditing}
+                  onRestore={() => {
+                    setLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
+                    setLinesDirty(true);
+                  }}
+                  suggestions={catalog[line.key]}
+                  applied={line.articleId ? appliedArticles[line.articleId] : undefined}
+                  onApply={(s, amount) => {
+                    setAppliedArticles((a) => ({ ...a, [s.articleId]: s }));
+                    setLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s, amount) : l)));
+                    setLinesDirty(true);
+                  }}
+                />
+              )}
+              groups={commodityGroups}
+              lines={lines}
+              taxTotal={taxTotal}
+              onShowTotal={showTotal}
+              editable={linesEditable}
+              lockedReason={request.status === 'closed' ? "Lines can't be changed once the request is closed." : undefined}
+              onChange={(next, tax) => {
+                setLines(next);
+                setTaxTotal(tax);
+                setLinesDirty(true);
+              }}
+              onShowSource={pdfUrl ? (line) => docPanel.current?.showSource(line) : undefined}
+            />
+            <WarningList
+              className="mt-4"
+              title="Extraction notes"
+              warnings={normalizeWarnings(request.extractionWarnings)}
+              onShowSource={pdfUrl ? (sources) => docPanel.current?.showSource({ sources }) : undefined}
+            />
           </div>
 
           <div className="lio-card p-6">
@@ -294,19 +454,17 @@ export default function RequestDetailPage() {
         </div>
 
         {/* Right column: PDF viewer */}
-        <div className="lio-card p-6">
-          <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Original Document</h2>
+        <div className="lg:sticky lg:top-6 self-start">
           {pdfUrl ? (
-            <iframe
-              src={pdfUrl}
-              title="Original PDF"
-              className="w-full h-[720px] rounded-lg border border-line"
-            />
+            <DocumentPanel ref={docPanel} fileUrl={pdfUrl} title="Original Document" />
           ) : (
-            <div className="h-[720px] rounded-lg border border-dashed border-line flex items-center justify-center text-center px-6">
-              <p className="text-sm text-ink/45">
-                No PDF attached. Upload one when creating a request to see it here.
-              </p>
+            <div className="lio-card p-6">
+              <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Original Document</h2>
+              <div className="h-[720px] rounded-lg border border-dashed border-line flex items-center justify-center text-center px-6">
+                <p className="text-sm text-ink/45">
+                  No PDF attached. Upload one when creating a request to see it here.
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -341,22 +499,9 @@ export default function RequestDetailPage() {
                 <Input label="Tax ID" value={form.vatId}
                   onChange={(e) => setForm({ ...form, vatId: e.target.value })} />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-ink/70 mb-1.5">Commodity Group *</label>
-                <select
-                  value={form.commodityGroupId || ''}
-                  onChange={(e) => setForm({ ...form, commodityGroupId: Number(e.target.value) })}
-                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60"
-                >
-                  <option value="">Select a commodity group</option>
-                  {commodityGroups?.map((g) => (
-                    <option key={g.id} value={g.id}>{g.id} - {g.category} - {g.name}</option>
-                  ))}
-                </select>
-              </div>
-              <Input label="Total Cost ($) *" type="number" step="0.01" value={form.totalCost}
-                onChange={(e) => setForm({ ...form, totalCost: parseFloat(e.target.value) || 0 })} />
-              <p className="text-xs text-ink/45">Order lines are edited from the request creation flow.</p>
+              <p className="text-xs text-ink/45">
+                Order lines, commodity groups and totals are edited in the Order Lines card.
+              </p>
             </div>
             <div className="border-t border-line p-6 bg-ink-800/[0.02] flex gap-3">
               <Button onClick={saveEdit} loading={busy} disabled={busy} className="flex-1">Save Changes</Button>
@@ -371,10 +516,25 @@ export default function RequestDetailPage() {
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value, onShow, showLabel }: {
+  label: string;
+  value: string;
+  onShow?: () => void;
+  /** Tooltip for the eye button; defaults to "Show <label> in document". */
+  showLabel?: string;
+}) {
   return (
     <div>
-      <dt className="text-ink/45 font-medium">{label}</dt>
+      <dt className="flex h-5 items-center gap-1 text-ink/45 font-medium">
+        {label}
+        {onShow && (
+          <SourceButton
+            className="h-6 w-6 -my-0.5"
+            label={showLabel ?? `Show ${label.toLowerCase()} in document`}
+            onClick={onShow}
+          />
+        )}
+      </dt>
       <dd className="text-ink mt-0.5">{value}</dd>
     </div>
   );

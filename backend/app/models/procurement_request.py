@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -60,8 +61,20 @@ class ProcurementRequest(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    # Financial
+    # Financial. total_cost is the grand total (net_total + tax_total), always
+    # computed on the server from the active order lines.
     total_cost: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    net_total: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    tax_total: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # Quote metadata
+    quote_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    currency: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default="USD", server_default="USD"
+    )
+    extraction_warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    field_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Multi-tenancy (added in migration 003, nullable for backward compatibility)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -79,8 +92,15 @@ class ProcurementRequest(Base, TimestampMixin):
     commodity_group: Mapped["CommodityGroup | None"] = relationship()
 
 
+LINE_KINDS = "('item', 'surcharge', 'discount', 'shipping', 'fee', 'alternative', 'optional')"
+
+
 class OrderLine(Base, CreatedAtMixin):
     __tablename__ = "order_lines"
+    __table_args__ = (
+        UniqueConstraint("request_id", "line_key", name="uq_order_lines_request_key"),
+        CheckConstraint(f"line_type IN {LINE_KINDS}", name="ck_order_lines_line_type"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     request_id: Mapped[uuid.UUID] = mapped_column(
@@ -96,6 +116,31 @@ class OrderLine(Base, CreatedAtMixin):
     unit: Mapped[str] = mapped_column(Text, nullable=False)
     total_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     line_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Rich line structure (migration 0007). ``line_key`` is unique per request;
+    # ``parent_key`` links alternatives/options/adjustments to another line's key.
+    line_type: Mapped[str] = mapped_column(
+        Text, nullable=False, default="item", server_default="item"
+    )
+    line_key: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    position: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vendor_item_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    list_unit_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    adjustment_percent: Mapped[float | None] = mapped_column(
+        Numeric(7, 3), nullable=True
+    )
+    sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_quote: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    article_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), nullable=True
+    )
+    # Per-line commodity group (migration 0010); the request's own
+    # commodity_group_id is the primary group computed from these.
+    commodity_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("commodity_groups.id", ondelete="SET NULL"), nullable=True
+    )
 
     request: Mapped["ProcurementRequest"] = relationship(back_populates="order_lines")
 

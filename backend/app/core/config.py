@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     """Application configuration, loaded from environment variables / .env."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", extra="ignore",
+        env_parse_none_str="none",
     )
 
     # Database
@@ -22,9 +23,11 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str | None = None
-    # gpt-4o-mini keeps extraction snappy — latency matters on the upload flow,
-    # and larger models were noticeably slower without a real quality gain.
-    openai_model: str = "gpt-4o-mini"
+    # Sol only accepts its default temperature, so none is sent by default.
+    openai_model: str = "gpt-6.1-sol"
+    # OPENAI_TEMPERATURE=none omits the parameter (some models reject it).
+    openai_temperature: float | None = None
+    openai_embedding_model: str = "text-embedding-3-small"
 
     # CORS — NoDecode lets us accept a plain comma-separated string instead of
     # the JSON list pydantic-settings would otherwise demand from env vars.

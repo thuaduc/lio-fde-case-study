@@ -86,3 +86,13 @@ def require_buyer_or_admin(
             detail="Only buyers and admins can approve requests.",
         )
     return membership
+
+
+def get_optional_membership(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> OrganizationMember | None:
+    """The current user's membership, or None when they have no organization yet."""
+    return db.scalar(
+        select(OrganizationMember).where(OrganizationMember.user_id == user.id)
+    )

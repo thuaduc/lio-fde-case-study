@@ -47,11 +47,63 @@ export type ConfigurableRequiredField = 'vat_id' | 'department';
 
 export interface OrganizationSettings {
   required_fields: ConfigurableRequiredField[];
+  // Requests with a grand total below this are auto-approved; null = always ask.
+  approval_threshold: number | null;
 }
 
 export interface MembersResponse {
   members: OrganizationMemberWithProfile[];
   invites: OrganizationInvite[];
+}
+
+export type LineKind =
+  | 'item'
+  | 'surcharge'
+  | 'discount'
+  | 'shipping'
+  | 'fee'
+  | 'alternative'
+  | 'optional';
+
+/** An extraction warning and the PDF boxes it refers to (empty when it has no location). */
+export interface WarningDetail {
+  message: string;
+  sources: SourceBox[];
+}
+
+/** Where header values (vendor, tax ID, ...) are printed in the PDF. */
+export type FieldSources = Partial<
+  Record<
+    | 'title'
+    | 'requestorName'
+    | 'vendorName'
+    | 'vatId'
+    | 'department'
+    | 'quoteNumber'
+    | 'validUntil'
+    /** The quote's printed grand total. */
+    | 'totalCost',
+    SourceBox[]
+  >
+>;
+
+/** Highlight box on a PDF page; coordinates are 0-1 fractions, origin top-left. */
+export interface SourceBox {
+  page: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface OriginalQuote {
+  positionDescription: string;
+  unitPrice: number;
+  amount: number;
+  unit: string;
+  vendorItemNumber?: string | null;
+  listUnitPrice?: number | null;
+  adjustmentPercent?: number | null;
 }
 
 export interface OrderLineInput {
@@ -60,32 +112,65 @@ export interface OrderLineInput {
   amount: number;
   unit: string;
   totalPrice: number;
+  // Rich-line fields (all optional so hand-typed lines stay simple).
+  key?: string;
+  parentKey?: string | null;
+  kind?: LineKind;
+  position?: string | null;
+  vendorItemNumber?: string | null;
+  listUnitPrice?: number | null;
+  adjustmentPercent?: number | null;
+  sources?: SourceBox[];
+  sourceText?: string | null;
+  articleId?: string | null;
+  originalQuote?: OriginalQuote | null;
+  /** The org's commodity group for this line (per-line booking). */
+  commodityGroupId?: number | null;
 }
 
 export interface CreateRequestInput {
+  /** Create from this draft: the server moves its PDF to the request and deletes it. */
+  draftId?: string | null;
+  quoteNumber?: string | null;
+  /** ISO date (YYYY-MM-DD). */
+  validUntil?: string | null;
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
   vatId: string;
-  commodityGroupId: number;
+  /** Optional: derived server-side from the lines' groups when they have them. */
+  commodityGroupId?: number | null;
   totalCost: number;
+  netTotal?: number | null;
+  taxTotal?: number | null;
+  fieldSources?: FieldSources | null;
+  extractionWarnings?: WarningDetail[] | null;
   department: string;
   orderLines: OrderLineInput[];
 }
 
 export interface UpdateRequestInput {
+  quoteNumber?: string | null;
+  validUntil?: string | null;
   requestorName: string;
   title: string;
   vendorName: string;
   vatId: string;
-  commodityGroupId: number;
+  /** Optional: derived server-side from the lines' groups when they have them. */
+  commodityGroupId?: number | null;
   totalCost: number;
+  netTotal?: number | null;
+  taxTotal?: number | null;
+  fieldSources?: FieldSources | null;
+  extractionWarnings?: WarningDetail[] | null;
   department: string;
   orderLines: OrderLineInput[];
 }
 
 export interface ExtractedVendorData {
   title: string;
+  /** The buyer's contact the quote is addressed to; empty when it names none. */
+  requestorName?: string;
   vendorName: string;
   vatId: string;
   department: string;
@@ -93,6 +178,12 @@ export interface ExtractedVendorData {
   totalCost: number;
   commodityGroupId: number | null;
   commodityGroupName: string | null;
+  quoteNumber?: string | null;
+  validUntil?: string | null;
+  currency?: string | null;
+  netTotal?: number | null;
+  taxTotal?: number | null;
+  fieldSources?: FieldSources;
 }
 
 export interface ExtractionResponse {
@@ -100,6 +191,9 @@ export interface ExtractionResponse {
   data?: ExtractedVendorData;
   error?: string;
   missingFields?: string[];
+  warnings?: string[];
+  /** Same messages as `warnings`, each with where it comes from in the PDF. */
+  warningDetails?: WarningDetail[];
 }
 
 export interface Supplier {
@@ -170,7 +264,15 @@ export interface RequestActivity {
   id: string;
   request_id: string;
   actor_id: string | null;
-  action: 'created' | 'updated' | 'status_changed' | 'approved' | 'rejected' | 'document_attached';
+  action:
+    | 'created'
+    | 'updated'
+    | 'status_changed'
+    | 'approved'
+    | 'rejected'
+    | 'auto_approved'
+    | 'approval_reset'
+    | 'document_attached';
   summary: string;
   detail: Record<string, unknown> | null;
   created_at: string;
@@ -269,9 +371,31 @@ export const organizations = {
 // Commodity groups
 // ============================================================================
 
+export interface CommodityGroupInput {
+  category: string;
+  name: string;
+  description?: string | null;
+}
+
 export const commodityGroups = {
-  list(): Promise<CommodityGroup[]> {
-    return apiFetch('/commodity-groups');
+  list(includeArchived = false): Promise<CommodityGroup[]> {
+    return apiFetch(`/commodity-groups${includeArchived ? '?include_archived=true' : ''}`);
+  },
+  create(input: CommodityGroupInput): Promise<CommodityGroup> {
+    return apiFetch('/commodity-groups', { body: input });
+  },
+  update(id: number, input: Partial<CommodityGroupInput>): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}`, { method: 'PATCH', body: input });
+  },
+  /** 409 while requests use it: archive instead. */
+  delete(id: number): Promise<void> {
+    return apiFetch(`/commodity-groups/${id}`, { method: 'DELETE' });
+  },
+  archive(id: number): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}/archive`, { method: 'POST' });
+  },
+  unarchive(id: number): Promise<CommodityGroup> {
+    return apiFetch(`/commodity-groups/${id}/unarchive`, { method: 'POST' });
   },
 };
 
@@ -297,7 +421,34 @@ export const suppliers = {
 // Articles
 // ============================================================================
 
+export interface ArticleSuggestion {
+  articleId: string;
+  articleNumber: string;
+  supplierName: string | null;
+  description: string;
+  unitPrice: number;
+  unit: string;
+  quantity: number;
+  matchType: 'same' | 'similar';
+  /** Quoted unit price minus the negotiated one (null when the quote has none). */
+  savingPerUnit: number | null;
+}
+
+export interface LineSuggestions {
+  lineIndex: number;
+  suggestions: ArticleSuggestion[];
+}
+
 export const articles = {
+  get(id: string): Promise<Article> {
+    return apiFetch(`/articles/${encodeURIComponent(id)}`);
+  },
+  /** Negotiated catalog articles matching each line (max 3 per line, cheapest first). */
+  suggestions(
+    lines: { description: string; unit?: string | null; unitPrice?: number | null; vendorItemNumber?: string | null }[],
+  ): Promise<LineSuggestions[]> {
+    return apiFetch('/articles/suggestions', { body: { lines } });
+  },
   list(params?: {
     search?: string;
     supplierId?: string;
@@ -318,6 +469,51 @@ export const articles = {
 };
 
 // ============================================================================
+// Drafts (server-side, private to their creator; Gmail-style autosave)
+// ============================================================================
+
+export interface DraftSummary {
+  id: string;
+  title: string | null;
+  vendorName: string | null;
+  totalCost: number | null;
+  fileName: string | null;
+  hasDocument: boolean;
+  updatedAt: string;
+}
+
+export interface DraftOut<T = Record<string, unknown>> extends DraftSummary {
+  data: T;
+}
+
+export const drafts = {
+  list(): Promise<DraftSummary[]> {
+    return apiFetch('/drafts');
+  },
+  get<T>(id: string): Promise<DraftOut<T>> {
+    return apiFetch(`/drafts/${id}`);
+  },
+  create<T>(data: T): Promise<DraftOut<T>> {
+    return apiFetch('/drafts', { body: { data } });
+  },
+  update<T>(id: string, data: T): Promise<DraftSummary> {
+    return apiFetch(`/drafts/${id}`, { method: 'PUT', body: { data } });
+  },
+  uploadDocument(id: string, file: File): Promise<void> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/drafts/${id}/document`, { method: 'PUT', formData });
+  },
+  /** Object URL of the draft's PDF, or null when it has none. */
+  documentUrl(id: string): Promise<string | null> {
+    return apiFetchObjectUrl(`/drafts/${id}/document`);
+  },
+  delete(id: string): Promise<void> {
+    return apiFetch(`/drafts/${id}`, { method: 'DELETE' });
+  },
+};
+
+// ============================================================================
 // PDF + extraction
 // ============================================================================
 
@@ -332,5 +528,11 @@ export const pdf = {
 export const extraction = {
   extract(text: string): Promise<ExtractionResponse> {
     return apiFetch('/extraction', { body: { text } });
+  },
+  /** Upload the PDF itself: rich lines with source highlights. */
+  extractPdf(file: File): Promise<ExtractionResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch('/extraction/pdf', { formData });
   },
 };

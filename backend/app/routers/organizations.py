@@ -27,6 +27,7 @@ from app.schemas.organizations import (
     OrganizationOut,
     OrganizationSettings,
 )
+from app.services.commodity_groups import copy_templates
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -57,6 +58,8 @@ def create_organization(
     db.add(
         OrganizationMember(organization_id=org.id, user_id=user.id, role="admin")
     )
+    # Every org starts with its own editable copy of the base commodity groups.
+    copy_templates(db, org.id)
     db.commit()
 
     return MyOrganizationOut(

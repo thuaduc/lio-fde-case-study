@@ -17,6 +17,7 @@ from app.data.articles import ARTICLES
 from app.data.commodity_groups import COMMODITY_GROUPS
 from app.data.suppliers import SUPPLIERS
 from app.db.session import SessionLocal
+from app.services.commodity_groups import copy_templates
 from app.models import (
     Article,
     CommodityGroup,
@@ -53,7 +54,7 @@ ORG_ACCOUNTS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
 
 
 def seed_commodity_groups(db: Session) -> int:
-    """Insert commodity groups that aren't already present (keyed by id)."""
+    """Insert the global template groups that aren't present (keyed by id)."""
     existing = set(db.scalars(select(CommodityGroup.id)))
     new = [
         CommodityGroup(id=cg_id, category=category, name=name)
@@ -62,6 +63,88 @@ def seed_commodity_groups(db: Session) -> int:
     ]
     db.add_all(new)
     return len(new)
+
+
+def seed_org_commodity_groups(db: Session) -> int:
+    """Give every seeded org its copy of the base templates (idempotent)."""
+    db.flush()  # templates added above must be visible to the copy
+    added = 0
+    for _name, slug, _accounts in ORG_ACCOUNTS:
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is not None:
+            added += copy_templates(db, org.id)
+    return added
+
+
+# Acme's booking rules (customer brief, task 3), as editable seed data:
+# (category, name, description). Each description states only the rule, so it
+# doesn't pull unrelated items (laptops, copy paper) away from their own groups.
+# The description is only filled in when the group has none, so an admin's
+# edits are never overwritten.
+ACME_BOOKING_GROUPS: list[tuple[str, str, str]] = [
+    (
+        "Facility Management",
+        "Electrical Engineering",
+        "Cable ties are always booked here.",
+    ),
+    (
+        "Information Technology",
+        "IT Hardware",
+        "Printer toner is always booked here.",
+    ),
+    (
+        "Office & Administration",
+        "Office Supplies",
+        "Small software subscriptions are always booked here.",
+    ),
+]
+
+# Earlier seeded wording (too broad). A stored description equal to one of
+# these is replaced once; any other text is an admin's and stays.
+SUPERSEDED_ACME_DESCRIPTIONS: frozenset[str] = frozenset(
+    {
+        "Electrical installations, components and wiring material. Cable ties "
+        "always have to be booked under Electrical Engineering.",
+        "Computer hardware, peripherals and printer supplies. Printer toner "
+        "always has to be booked under IT Hardware.",
+        "Office consumables and everyday office needs. Small software "
+        "subscriptions always have to be booked under Office Supplies.",
+    }
+)
+
+
+def seed_acme_booking_groups(db: Session) -> int:
+    """Add Acme's booking-rule groups / descriptions; returns rows changed."""
+    org = db.scalar(select(Organization).where(Organization.slug == "acme"))
+    if org is None:
+        return 0
+    db.flush()
+    changed = 0
+    for category, name, description in ACME_BOOKING_GROUPS:
+        group = db.scalar(
+            select(CommodityGroup).where(
+                CommodityGroup.organization_id == org.id,
+                CommodityGroup.category == category,
+                CommodityGroup.name == name,
+            )
+        )
+        if group is None:
+            db.add(
+                CommodityGroup(
+                    organization_id=org.id,
+                    category=category,
+                    name=name,
+                    description=description,
+                )
+            )
+            changed += 1
+        elif (
+            group.description is None
+            or group.description in SUPERSEDED_ACME_DESCRIPTIONS
+        ):
+            group.description = description
+            changed += 1
+    return changed
 
 
 def seed_suppliers(db: Session, organization_id: uuid.UUID) -> int:
@@ -136,6 +219,26 @@ def seed_articles(db: Session, organization_id: uuid.UUID) -> int:
     return len(new)
 
 
+# Per-org settings applied when the key is unset (never overwrites an admin's
+# choice). Acme asked for requests under $2,000 to skip buyer approval.
+ORG_DEFAULT_SETTINGS: dict[str, dict] = {"acme": {"approval_threshold": 2000}}
+
+
+def seed_org_settings(db: Session) -> int:
+    """Fill missing default settings keys; returns the number of orgs updated."""
+    updated = 0
+    for slug, defaults in ORG_DEFAULT_SETTINGS.items():
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is None:
+            continue
+        current = dict(org.settings or {})
+        missing = {k: v for k, v in defaults.items() if k not in current}
+        if missing:
+            org.settings = {**current, **missing}  # reassign so JSONB is dirtied
+            updated += 1
+    return updated
+
+
 def seed_organizations_and_accounts(db: Session) -> tuple[int, int]:
     """Create the tenants and their accounts (keyed by slug / email)."""
     orgs_created = 0
@@ -175,11 +278,15 @@ def seed(db: Session) -> dict[str, int]:
     dev_org_id = dev_org.id if dev_org else None
     counts = {
         "commodity_groups": seed_commodity_groups(db),
+        # Org copies need the templates above and the orgs created earlier.
+        "org_commodity_groups": seed_org_commodity_groups(db),
+        "acme_booking_groups": seed_acme_booking_groups(db),
         # Master data belongs to Acme; skip if that org somehow isn't seeded.
         "suppliers": seed_suppliers(db, dev_org_id) if dev_org_id else 0,
         # Articles reference suppliers by name, so this must run after suppliers.
         "articles": seed_articles(db, dev_org_id) if dev_org_id else 0,
         "organizations": orgs_created,
+        "org_settings": seed_org_settings(db),
         "users": users_created,
     }
     db.commit()

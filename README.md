@@ -33,7 +33,38 @@ Development happens in the **Acme Corp** organization, which has one of each rol
 | `buyer@acme.com` | buyer | approve requests |
 | `requester@acme.com` | requester | create & track requests |
 
-Every request needs approval by a buyer or admin (see the **Approvals** tab).
+Acme requests below $2,000, including tax, are approved automatically. Requests
+at or above that amount need a buyer or admin (see the **Approvals** tab). Admins
+can change or disable the threshold in Organization settings. A price edit that
+changes an approved request's total re-evaluates its approval.
+
+Status follows approval: an approved request moves from Open to In progress, and a
+rejected one is closed. If an edit sends an approved request back to pending, it
+reopens. Anyone can still change the status by hand.
+
+The PDF form extracts items, discounts, charges and alternatives, with eye
+buttons linking fields, warnings and lines to their source boxes in the PDF.
+Requestor Name is prefilled with the person the quote is addressed to (e.g.
+"Prepared for"), unless you already typed one. Department is filled only when
+the quote names one. A value the AI worked out rather than copied links to what
+it came from: the title to the rows naming the purchase, a validity date
+computed from "valid for four weeks" to that sentence and the quote date. The
+total links to the quote's printed grand total, and the primary commodity group
+to the lines booked to it.
+Drafts save automatically and can be resumed from Requests. Until a request is
+closed, you can edit its lines, swap alternatives and apply negotiated catalog
+prices. Every editable item has a **Replace from catalog** picker with search and supplier filtering.
+Review one line at a time; changing units requires a new quantity. The saved
+request links to the catalog article, and **Restore quoted item** restores the
+original values even after reloading. Catalog replacements use the request
+currency; the app does not convert currencies or infer quantities across units.
+
+Commodity groups are assigned per line using your organization's booking
+descriptions. Admins manage these groups in Organization settings. The request's
+primary group is computed from its largest active spend.
+
+Extraction needs a PDF text layer. Scans and image-only header fields (including
+verdeform's EIN) need OCR, which is not implemented; missing values stay empty.
 
 Other tenants exist to show the multi-tenant setup — **Walmart, Schaeffler,
 Siemens, BMW** — each with an admin at `admin@<company>.com` (same password).
@@ -46,6 +77,16 @@ in the `postgres_data` volume; `docker compose down -v` resets it). The OpenAI
 key is only needed for PDF extraction — everything else works without it.
 
 ## Local development
+
+If you previously ran this PR through migration `0011`, its schema is already
+current. After rebuilding the backend image, update only its revision marker:
+`docker compose run --rm --no-deps backend alembic stamp --purge 0007`.
+Fresh databases and databases at `0006` use the normal startup migration.
+
+Requests extracted before every field had a source highlight can get the
+missing ones from their stored PDFs. This re-runs extraction (needs the OpenAI
+key) but only adds highlights; stored values and highlights stay:
+`docker compose exec backend python -m app.backfill_field_sources`.
 
 ```bash
 docker compose up db        # Postgres only
@@ -78,3 +119,16 @@ backend/    FastAPI app — routers, services, models, schemas, core; Alembic mi
 frontend/   Next.js app — app-router pages, typed API client (src/lib/api), components
 docker-compose.yml
 ```
+
+
+## Final audit regression checks
+
+Run `npm test` from `frontend/` (Node 22.12+). The DOM-based checks exercise
+catalog keyboard handling, persistent article labels, draft write ordering,
+PDF replacement, duplicate submission, stale detail responses and preservation
+of unsaved edits. Pure checks cover discount signs, decimal input and linked
+charges when positions are removed or made optional.
+
+Run `backend/.venv/bin/pytest backend/tests -q` from the app directory for API
+regressions, including closed-request tax locking and numeric/required-field
+validation. The audit adds no database migration.

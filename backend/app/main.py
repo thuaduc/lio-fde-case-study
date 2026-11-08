@@ -6,6 +6,7 @@ from app.routers import (
     articles,
     auth,
     commodity_groups,
+    drafts,
     extraction,
     organizations,
     pdf,
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(requests.router)
+    app.include_router(drafts.router)
     app.include_router(organizations.router)
     app.include_router(commodity_groups.router)
     app.include_router(suppliers.router)

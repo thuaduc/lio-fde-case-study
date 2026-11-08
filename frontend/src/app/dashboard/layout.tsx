@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { auth, organizations, type AuthUser, type MemberRole } from '@/lib/api';
 import DashboardNav from './components/DashboardNav';
 
@@ -11,11 +12,15 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [role, setRole] = useState<MemberRole | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // The root query provider survives sign-out/sign-in navigation. Do not
+    // reuse the previous account's cached organization or catalog records.
+    queryClient.clear();
     const checkAuth = async () => {
       try {
         const { user } = await auth.me();
@@ -35,7 +40,7 @@ export default function DashboardLayout({
     };
 
     checkAuth();
-  }, [router]);
+  }, [router, queryClient]);
 
   if (loading) {
     return (
