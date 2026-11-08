@@ -213,6 +213,22 @@ def test_temperature_omitted_when_none(monkeypatch, db, rows_layout):
     assert "temperature" not in fake.calls[0]
 
 
+def test_settings_defaults_omit_temperature(monkeypatch, db, rows_layout):
+    from app.core.config import Settings
+
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_TEMPERATURE", raising=False)
+    defaults = Settings(_env_file=None)
+    assert defaults.openai_model == "gpt-6.1-sol"
+    assert defaults.openai_temperature is None
+    monkeypatch.setattr(svc.settings, "openai_model", defaults.openai_model)
+    monkeypatch.setattr(svc.settings, "openai_temperature", defaults.openai_temperature)
+    fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
+    svc.extract_from_pdf(b"%PDF-", db)
+    assert fake.calls[0]["model"] == "gpt-6.1-sol"
+    assert "temperature" not in fake.calls[0]
+
+
 def test_scan_pdf_no_model_call(monkeypatch, db):
     monkeypatch.setattr(svc, "extract_layout", lambda b: PdfLayout(rows=[], page_count=2))
     fake = use(monkeypatch, FakeClient())

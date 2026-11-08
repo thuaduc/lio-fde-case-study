@@ -23,11 +23,10 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str | None = None
-    # gpt-4o-mini keeps extraction snappy — latency matters on the upload flow,
-    # and larger models were noticeably slower without a real quality gain.
-    openai_model: str = "gpt-4o-mini"
+    # Sol only accepts its default temperature, so none is sent by default.
+    openai_model: str = "gpt-6.1-sol"
     # OPENAI_TEMPERATURE=none omits the parameter (some models reject it).
-    openai_temperature: float | None = 0.0
+    openai_temperature: float | None = None
 
     # CORS — NoDecode lets us accept a plain comma-separated string instead of
     # the JSON list pydantic-settings would otherwise demand from env vars.
