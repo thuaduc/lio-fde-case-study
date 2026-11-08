@@ -308,8 +308,19 @@ def _money(v: float) -> str:
     return f"-${abs(v):,.2f}" if v < 0 else f"${v:,.2f}"
 
 
+PRICE_TOL_ABS = 0.01
+PRICE_TOL_REL = 0.005
+TOTALS_TOL_PER_LINE = 0.01  # rounding slack allowed per active line in totals checks
+
+
 def _tol(ref: float) -> float:
-    return max(0.01, 0.005 * abs(ref)) + 1e-9
+    """Tolerance for price verification and the per-line math check."""
+    return max(PRICE_TOL_ABS, PRICE_TOL_REL * abs(ref)) + 1e-9
+
+
+def _totals_tol(active_line_count: int) -> float:
+    """Tight tolerance for the totals checks: one cent of rounding per line."""
+    return TOTALS_TOL_PER_LINE * max(1, active_line_count) + 1e-9
 
 
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
@@ -381,17 +392,18 @@ def reconcile(
 ) -> list[str]:
     """Warnings where the quote's stated totals disagree with its lines."""
     warnings: list[str] = []
+    keys = active_keys(lines)
+    tol = _totals_tol(sum(1 for ln in lines if ln.key in keys))
     if net_total is not None:
-        keys = active_keys(lines)
         computed = _round(sum(ln.total_price for ln in lines if ln.key in keys))
-        if abs(computed - net_total) > _tol(net_total):
+        if abs(computed - net_total) > tol:
             warnings.append(
                 f"Line items add up to {_money(computed)} but the quote's net "
                 f"total is {_money(net_total)}"
             )
     if net_total is not None and tax_total is not None and grand_total is not None:
         expected = _round(net_total + tax_total)
-        if abs(expected - grand_total) > _tol(grand_total):
+        if abs(expected - grand_total) > tol:
             warnings.append(
                 f"Net total {_money(net_total)} plus tax {_money(tax_total)} is "
                 f"{_money(expected)} but the quote's grand total is "

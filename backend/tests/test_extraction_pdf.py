@@ -436,6 +436,19 @@ def test_prompt_department_is_buyers_only():
     assert "Apple Business Team" in prompt
 
 
+def test_apple_fee_missing_from_net_warns():
+    lines = [el("1", 1409.06), el("2", 4.00, kind="fee")]
+    w = svc.reconcile(lines, 1409.06, 121.53, 1534.59)
+    assert "Line items add up to $1,413.06 but the quote's net total is $1,409.06" in w
+    # net + tax (1,530.59) also disagrees with the 1,534.59 grand total
+    assert len(w) == 2 and "grand total is $1,534.59" in w[1]
+
+
+def test_totals_tolerance_scales_with_active_lines():
+    assert svc._totals_tol(0) == svc._totals_tol(1) == pytest.approx(0.01)
+    assert svc._totals_tol(5) == pytest.approx(0.05)
+
+
 def test_line_math_warns():
     l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
     _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
