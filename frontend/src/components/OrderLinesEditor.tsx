@@ -154,7 +154,12 @@ export default function OrderLinesEditor({
         role={editable ? 'button' : undefined}
         tabIndex={editable ? 0 : undefined}
         onClick={editable && !line.removed ? () => setEditingKey(line.key) : undefined}
-        onKeyDown={editable && !line.removed ? (e) => e.key === 'Enter' && setEditingKey(line.key) : undefined}
+        onKeyDown={editable && !line.removed ? (e) => {
+          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            setEditingKey(line.key);
+          }
+        } : undefined}
         className={cn(
           'rounded-lg bg-ink-800/[0.02] p-3',
           editable && !line.removed && 'cursor-pointer transition-colors hover:bg-ink-800/[0.045]',

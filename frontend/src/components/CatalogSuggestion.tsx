@@ -102,7 +102,12 @@ export default function CatalogSuggestion({ line, suggestions, applied, editable
   if (line.removed || (!line.articleId && !editable)) return null;
   const canReplace = editable && ['item', 'alternative', 'optional'].includes(line.kind);
   return (
-    <div className="mt-2 space-y-2 text-sm" onClick={(e) => e.stopPropagation()}>
+    <div className="mt-2 space-y-2 text-sm" onClick={(e) => {
+      // Empty space belongs to the clickable row; only catalog controls consume clicks.
+      if ((e.target as HTMLElement).closest('a, button, input, select, textarea, dialog')) {
+        e.stopPropagation();
+      }
+    }}>
       {line.articleId && <p className="text-accent-deep">
         Catalog: <Link className="font-medium underline underline-offset-2" href={href(line.articleId)} target="_blank" rel="noopener noreferrer">
           {applied?.articleNumber || line.vendorItemNumber || 'View catalog article'} ↗
