@@ -25,6 +25,8 @@ interface DraftData {
   title: string;
   vendorName: string;
   vatId: string;
+  quoteNumber?: string;
+  validUntil?: string;
   department: string;
   commodityGroupId: number | null;
   orderLines: Line[];
@@ -48,6 +50,8 @@ export default function NewRequestPage() {
   const [title, setTitle] = useState('');
   const [vendorName, setVendorName] = useState('');
   const [vatId, setVatId] = useState('');
+  const [quoteNumber, setQuoteNumber] = useState('');
+  const [validUntil, setValidUntil] = useState('');
   const [department, setDepartment] = useState('');
   const [commodityGroupId, setCommodityGroupId] = useState<number | null>(null);
   const [orderLines, setOrderLines] = useState<Line[]>([]);
@@ -99,6 +103,8 @@ export default function NewRequestPage() {
           setTitle(data.title ?? '');
           setVendorName(data.vendorName ?? '');
           setVatId(data.vatId ?? '');
+          setQuoteNumber(data.quoteNumber ?? '');
+          setValidUntil(data.validUntil ?? '');
           setDepartment(data.department ?? '');
           setCommodityGroupId(data.commodityGroupId ?? null);
           setOrderLines(normalizeLines(data.orderLines ?? []));
@@ -164,7 +170,7 @@ export default function NewRequestPage() {
   const fileUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
   const draftData: DraftData = {
-    requestorName, title, vendorName, vatId, department, commodityGroupId, orderLines,
+    requestorName, title, vendorName, vatId, quoteNumber, validUntil, department, commodityGroupId, orderLines,
     taxTotal, quotedGrandTotal, extractionWarnings, fieldSources, totalCost: totals.grand,
   };
 
@@ -244,6 +250,8 @@ export default function NewRequestPage() {
       setTitle(extracted.title || '');
       setVendorName(extracted.vendorName || '');
       setVatId(extracted.vatId || '');
+      setQuoteNumber(extracted.quoteNumber || '');
+      setValidUntil(extracted.validUntil || '');
       // Only a department the quote actually states replaces the default.
       if (extracted.department) setDepartment(extracted.department);
       setOrderLines(normalizeLines(extracted.orderLines || []));
@@ -308,6 +316,8 @@ export default function NewRequestPage() {
         titleShortDescription: title,
         vendorName,
         vatId,
+        quoteNumber: quoteNumber || null,
+        validUntil: validUntil || null,
         commodityGroupId: commodityGroupId,
         totalCost: totals.grand,
         netTotal: totals.net,
@@ -446,7 +456,7 @@ export default function NewRequestPage() {
 
         {/* Request Details */}
         <div className="lio-card p-6 space-y-4">
-          {sectionHeading('Request Details', boxesFor('department', 'quoteNumber', 'validUntil'))}
+          {sectionHeading('Request Details', boxesFor('department'))}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
@@ -476,7 +486,7 @@ export default function NewRequestPage() {
 
         {/* Vendor Information */}
         <div className="lio-card p-6 space-y-4">
-          {sectionHeading('Vendor Information', boxesFor('vendorName', 'vatId'))}
+          {sectionHeading('Vendor Information', boxesFor('vendorName', 'vatId', 'quoteNumber', 'validUntil'))}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
@@ -492,6 +502,20 @@ export default function NewRequestPage() {
               value={vatId}
               onChange={(e) => setVatId(e.target.value)}
               placeholder="12-3456789"
+            />
+
+            <Input
+              label="Quote number"
+              value={quoteNumber}
+              onChange={(e) => setQuoteNumber(e.target.value)}
+              placeholder="Q-2024-001"
+            />
+
+            <Input
+              label="Valid until"
+              type="date"
+              value={validUntil}
+              onChange={(e) => setValidUntil(e.target.value)}
             />
           </div>
 

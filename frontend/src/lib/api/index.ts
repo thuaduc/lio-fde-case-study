@@ -101,6 +101,9 @@ export interface OrderLineInput {
 export interface CreateRequestInput {
   /** Create from this draft: the server moves its PDF to the request and deletes it. */
   draftId?: string | null;
+  quoteNumber?: string | null;
+  /** ISO date (YYYY-MM-DD). */
+  validUntil?: string | null;
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
@@ -115,6 +118,8 @@ export interface CreateRequestInput {
 }
 
 export interface UpdateRequestInput {
+  quoteNumber?: string | null;
+  validUntil?: string | null;
   requestorName: string;
   title: string;
   vendorName: string;

@@ -181,6 +181,8 @@ export default function RequestDetailPage() {
     department: header.department,
     taxTotal: tax,
     fieldSources: request?.fieldSources ?? null,
+    quoteNumber: request?.quoteNumber ?? null,
+    validUntil: request?.validUntil ?? null,
     orderLines: linesForSave(editorLines),
   });
 
@@ -337,6 +339,11 @@ export default function RequestDetailPage() {
               <Field label="Department" value={request.department || '—'} />
               <Field label="Vendor" value={request.vendor_name} />
               <Field label="Tax ID" value={request.vat_id || '—'} />
+              <Field label="Quote number" value={request.quoteNumber || '—'} />
+              <Field
+                label="Valid until"
+                value={request.validUntil ? new Date(`${request.validUntil}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}
+              />
               <Field
                 label="Commodity Group"
                 value={request.commodity_groups
