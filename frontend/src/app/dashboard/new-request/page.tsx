@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import * as api from '@/lib/api';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
@@ -8,6 +8,15 @@ import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
+
+const LAST_DEPARTMENT_KEY = 'lio.lastDepartment';
+const readLastDepartment = () => {
+  try {
+    return window.localStorage.getItem(LAST_DEPARTMENT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
 
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
@@ -27,6 +36,17 @@ export default function NewRequestPage() {
   const [quotedGrandTotal, setQuotedGrandTotal] = useState<number | null>(null);
   const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
   const totals = computeTotals(orderLines, taxTotal);
+
+  // Requestor defaults to the signed-in user; department to the one they used last.
+  useEffect(() => {
+    api.auth
+      .me()
+      .then(({ user, profile }) =>
+        setRequestorName((cur) => cur || profile?.full_name || user.email),
+      )
+      .catch(() => {});
+    setDepartment((cur) => cur || readLastDepartment());
+  }, []);
 
   // Document panel (side-by-side PDF with search-to-highlight)
   const docPanel = useRef<DocumentPanelHandle>(null);
@@ -71,7 +91,8 @@ export default function NewRequestPage() {
       setTitle(extracted.title || '');
       setVendorName(extracted.vendorName || '');
       setVatId(extracted.vatId || '');
-      setDepartment(extracted.department || '');
+      // Only a department the quote actually states replaces the default.
+      if (extracted.department) setDepartment(extracted.department);
       setOrderLines(normalizeLines(extracted.orderLines || []));
       setTaxTotal(extracted.taxTotal ?? 0);
       setQuotedGrandTotal(extracted.totalCost || null);
@@ -83,9 +104,13 @@ export default function NewRequestPage() {
       }
 
       // Show warnings for missing fields
-      if (extractionResult.missingFields && extractionResult.missingFields.length > 0) {
+      // Department not on the quote is fine when it is already filled from the default.
+      const missing = (extractionResult.missingFields ?? []).filter(
+        (f) => !(f === 'Department' && (extracted.department || department)),
+      );
+      if (missing.length > 0) {
         setWarning(
-          `⚠️ Could not extract: ${extractionResult.missingFields.join(', ')}. Please fill in these fields manually.`
+          `⚠️ Could not extract: ${missing.join(', ')}. Please fill in these fields manually.`
         );
       }
 
@@ -134,6 +159,12 @@ export default function NewRequestPage() {
         department,
         orderLines: linesToSave,
       });
+
+      try {
+        if (department) window.localStorage.setItem(LAST_DEPARTMENT_KEY, department);
+      } catch {
+        // Storage unavailable; the default is a convenience only.
+      }
 
       // Attach the original PDF (if one was uploaded) so it shows on the detail page.
       if (file) {
