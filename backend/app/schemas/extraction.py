@@ -64,8 +64,8 @@ class ExtractedVendorData(BaseModel):
     currency: str | None = None
     net_total: float | None = Field(default=None, alias="netTotal")
     tax_total: float | None = Field(default=None, alias="taxTotal")
-    # Header-field highlights keyed requestorName/vendorName/vatId/department/
-    # quoteNumber/validUntil; a key is present only when it has boxes.
+    # Header-field highlights keyed title/requestorName/vendorName/vatId/
+    # department/quoteNumber/validUntil; a key is present only when it has boxes.
     field_sources: dict[str, list[Box]] = Field(
         default_factory=dict, alias="fieldSources"
     )
@@ -126,8 +126,10 @@ class LlmLine(BaseModel):
 
 
 class LlmFieldSources(BaseModel):
-    """Row ids where each header value is printed (empty list if not on the quote)."""
+    """Row ids where each header value is printed or worked out from (empty list
+    if not on the quote)."""
 
+    title: list[str]
     requestor_name: list[str]
     vendor_name: list[str]
     vendor_tax_id: list[str]

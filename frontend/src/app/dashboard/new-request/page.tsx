@@ -510,13 +510,16 @@ export default function NewRequestPage() {
             </div>
           </div>
 
-          <Input
-            label="Title / Short Description *"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            placeholder="Adobe Creative Cloud Subscription"
-          />
+          <div>
+            {fieldLabel('Title / Short Description *', 'title')}
+            <Input
+              aria-label="Title / Short Description"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              placeholder="Adobe Creative Cloud Subscription"
+            />
+          </div>
         </div>
 
         {/* Vendor Information */}

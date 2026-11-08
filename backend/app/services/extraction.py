@@ -254,7 +254,7 @@ Rules:
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
 - vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 12-3456789'); look there before giving up.
 - vendor_name: prefer the letterhead / sender line over a later mention in the terms.
-- field_source_rows cites, for requestor_name, vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 12-3456789' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
+- field_source_rows cites, for title, requestor_name, vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 12-3456789' row, the vendor's name/letterhead row). For a value you worked out rather than copied (the title; a valid_until computed from a validity period such as 'valid for four weeks' and the quote date), cite the rows it was worked out from. An empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
 - Classify every line: its commodity_group_id is the SINGLE most appropriate group below for that line, or null if genuinely uncertain. Discounts, surcharges, shipping and fees tied to a position take that position's group.
 - commodity_group_id (quote level): the group of the largest share of the spend, or null if genuinely uncertain.
@@ -415,6 +415,7 @@ def boxes_for_rows(row_ids: list[str], layout: PdfLayout) -> list[Box]:
 
 # LlmFieldSources attribute -> (ExtractedVendorData wire key, LlmQuote value attribute)
 _HEADER_FIELDS = (
+    ("title", "title", "title"),
     ("requestor_name", "requestorName", "requestor_name"),
     ("vendor_name", "vendorName", "vendor_name"),
     ("vendor_tax_id", "vatId", "vendor_tax_id"),
@@ -423,6 +424,13 @@ _HEADER_FIELDS = (
     ("valid_until", "validUntil", "valid_until"),
 )
 
+
+# A validity period a valid_until date can be worked out from ("four weeks", "30 days").
+_PERIOD = re.compile(
+    r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen"
+    r"|thirty|sixty|ninety)[\s-]+(calendar\s+|business\s+|working\s+)?(day|week|month)s?\b",
+    re.IGNORECASE,
+)
 
 _CORP_WORDS = {"inc", "llc", "corp", "co", "ltd", "gmbh", "the", "and", "of"}
 _WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -585,8 +593,22 @@ def _field_box(attr: str, value: str, cited: list, layout: PdfLayout) -> Box | N
     return box
 
 
+def _worked_out_from(attr: str, cited: list) -> bool:
+    """Whether a value with no printed match was worked out from the cited rows:
+    a title always is; a valid_until only when the rows state a validity period."""
+    if not cited:
+        return False
+    if attr == "title":
+        return True
+    if attr == "valid_until":
+        return bool(_PERIOD.search(" ".join(r.text for r in cited)))
+    return False
+
+
 def resolve_field_sources(q: LlmQuote, layout: PdfLayout) -> dict[str, list[Box]]:
-    """At most one tight, word-level box per header field."""
+    """One tight, word-level box per header field where the value is printed;
+    the cited rows where it was worked out from them (a title, a valid_until
+    computed from 'valid for four weeks')."""
     out: dict[str, list[Box]] = {}
     for attr, key, value_attr in _HEADER_FIELDS:
         value = getattr(q, value_attr)
@@ -596,6 +618,8 @@ def resolve_field_sources(q: LlmQuote, layout: PdfLayout) -> dict[str, list[Box]
         box = _field_box(attr, str(value), cited, layout)
         if box is not None:
             out[key] = [box]
+        elif _worked_out_from(attr, cited):
+            out[key] = _merge_boxes(cited)
     return out
 
 

@@ -74,7 +74,13 @@ export interface WarningDetail {
 /** Where header values (vendor, tax ID, ...) are printed in the PDF. */
 export type FieldSources = Partial<
   Record<
-    'requestorName' | 'vendorName' | 'vatId' | 'department' | 'quoteNumber' | 'validUntil',
+    | 'title'
+    | 'requestorName'
+    | 'vendorName'
+    | 'vatId'
+    | 'department'
+    | 'quoteNumber'
+    | 'validUntil',
     SourceBox[]
   >
 >;

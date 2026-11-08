@@ -37,8 +37,8 @@ def line(**kw) -> LlmLine:
 
 
 def fsr(**kw) -> LlmFieldSources:
-    base = dict(requestor_name=[], vendor_name=[], vendor_tax_id=[], department=[],
-                quote_number=[], valid_until=[])
+    base = dict(title=[], requestor_name=[], vendor_name=[], vendor_tax_id=[],
+                department=[], quote_number=[], valid_until=[])
     base.update(kw)
     return LlmFieldSources(**base)
 
@@ -139,7 +139,12 @@ def test_null_requestor_name_is_missing():
 def test_prompt_asks_for_the_buyer_contact_as_requestor():
     prompt = svc._build_pdf_prompt("[r1] text", "")
     assert "requestor_name is the person at the BUYER" in prompt
-    assert "requestor_name, vendor_name, vendor_tax_id" in prompt
+    assert "title, requestor_name, vendor_name, vendor_tax_id" in prompt
+
+
+def test_prompt_asks_for_the_rows_a_worked_out_value_comes_from():
+    prompt = svc._build_pdf_prompt("[r1] text", "")
+    assert "cite the rows it was worked out from" in prompt
 
 
 def test_unpriced_charges_become_warnings():
@@ -607,13 +612,16 @@ def test_wrong_cited_row_falls_back_to_whole_layout(quote_bytes):
     assert covered(lt, fs["vatId"])[-2:] == ["94", "1985704"]
 
 
-def test_unmatched_value_keeps_only_a_gap_segment_or_nothing(quote_bytes):
+def test_unmatched_value_keeps_only_a_gap_segment_or_its_basis(quote_bytes):
     from tests.test_pdf_layout import HOLLIS
     lt = real(quote_bytes, HOLLIS)
-    # derived value ('four weeks' after 12/12/2023): no printed form on the quote
-    row = next(r for r in lt.rows if "prices in this quote are valid" in r.text)
-    fs = sources(lt, valid_until="2024-01-09", field_source_rows=fsr(valid_until=[row.id]))
-    assert "validUntil" not in fs
+    # derived value ('four weeks' after 12/12/2023): no printed form on the quote,
+    # so the box marks the validity period it was worked out from
+    i = next(n for n, r in enumerate(lt.rows) if "prices in this quote are valid" in r.text)
+    rows = [lt.rows[i].id, lt.rows[i + 1].id]
+    fs = sources(lt, valid_until="2024-01-09", field_source_rows=fsr(valid_until=rows))
+    words = covered(lt, fs["validUntil"])
+    assert words[-4:] == ["valid", "for", "four", "weeks."]
     # token fallback: a multi-column row is cut to the segment holding the value
     lt = real(quote_bytes, APPLE)
     row = cite(lt, "Apple Business Team")
@@ -650,6 +658,31 @@ def test_valid_until_printed_forms(printed):
     lt, fs = synth(wrow("a", f"Date: 11/28/23 Valid until: {printed}"), attr="valid_until",
                    valid_until="2024-01-27")
     assert words_in(lt, fs["validUntil"]) == ["Valid", "until:", *printed.split()]
+
+
+def test_title_printed_as_is_gets_a_tight_box():
+    lt, fs = synth(wrow("a", "our quote for the requested moss art panel."), attr="title",
+                   title="Moss Art Panel")
+    assert words_in(lt, fs["title"]) == ["moss", "art", "panel."]
+
+
+def test_written_title_marks_the_cited_rows():
+    lt, fs = synth(wrow("a", "MBA 13-inch M3 8GB", y0=0.1), wrow("b", "Midnight", y0=0.12),
+                   attr="title", title="Business laptop")
+    assert fs["title"] == [svc._merge_boxes(lt.rows)[0]]
+
+
+def test_valid_until_without_a_period_in_the_cited_rows_has_no_box():
+    lt, fs = synth(wrow("a", "Thank you for your order"), attr="valid_until",
+                   valid_until="2024-01-09")
+    assert "validUntil" not in fs
+
+
+@pytest.mark.parametrize("period", ["for four weeks.", "30 days", "for 3 months", "for 14-day"])
+def test_valid_until_worked_out_from_a_period_marks_it(period):
+    lt, fs = synth(wrow("a", f"Prices are valid {period}"), attr="valid_until",
+                   valid_until="2024-01-09")
+    assert fs["validUntil"] == [lt.rows[0].box]
 
 
 def test_label_fused_to_value_is_split():

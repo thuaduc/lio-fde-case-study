@@ -264,6 +264,7 @@ export default function RequestDetailPage() {
     ? activity.find((a) => a.action === 'auto_approved')?.detail?.threshold
     : undefined;
   const autoThreshold = typeof autoApprovedAt === 'number' ? autoApprovedAt : null;
+  const showTitle = showField('title');
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -274,7 +275,10 @@ export default function RequestDetailPage() {
       {/* Header */}
       <div className="mt-3 mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink">{request.title}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-semibold tracking-tight text-ink">{request.title}</h1>
+            {showTitle && <SourceButton className="h-7 w-7" label="Show title in document" onClick={showTitle} />}
+          </div>
           <div className="flex items-center gap-2 mt-2">
             <span className={`inline-flex px-2.5 py-1 text-xs font-semibold rounded-full ${STATUS_BADGE[request.status]}`}>
               {titleCase(request.status)}
