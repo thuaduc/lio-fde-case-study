@@ -1,19 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useMutation } from '@tanstack/react-query';
 import * as api from '@/lib/api';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { Button, Input, Alert, Loader } from '@/components/base';
+import OrderLinesEditor from '@/components/OrderLinesEditor';
+import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
+import { type Line, computeTotals, normalizeLines } from '@/lib/orderLines';
 
-interface OrderLine {
-  positionDescription: string;
-  unitPrice: number;
-  amount: number;
-  unit: string;
-  totalPrice: number;
-}
+const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
 export default function NewRequestPage() {
   const router = useRouter();
@@ -26,8 +22,14 @@ export default function NewRequestPage() {
   const [vatId, setVatId] = useState('');
   const [department, setDepartment] = useState('');
   const [commodityGroupId, setCommodityGroupId] = useState<number | null>(null);
-  const [orderLines, setOrderLines] = useState<OrderLine[]>([]);
-  const [totalCost, setTotalCost] = useState<number>(0);
+  const [orderLines, setOrderLines] = useState<Line[]>([]);
+  const [taxTotal, setTaxTotal] = useState<number>(0);
+  const [quotedGrandTotal, setQuotedGrandTotal] = useState<number | null>(null);
+  const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
+  const totals = computeTotals(orderLines, taxTotal);
+
+  // Document panel (side-by-side PDF with search-to-highlight)
+  const docPanel = useRef<DocumentPanelHandle>(null);
 
   // UI state
   const [file, setFile] = useState<File | null>(null);
@@ -36,23 +38,14 @@ export default function NewRequestPage() {
   const [warning, setWarning] = useState('');
   const [extracting, setExtracting] = useState(false);
 
-  // PDF parsing mutation
-  const parsePDFMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const result = await api.pdf.parse(file);
-      if (!result.text) {
-        throw new Error('Failed to parse PDF');
-      }
-      return result.text;
-    },
-  });
+  const fileUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
   // Handle file upload and extraction
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
-    if (uploadedFile.type !== 'application/pdf') {
+    if (!isPdfFile(uploadedFile)) {
       setError('Please upload a PDF file');
       return;
     }
@@ -61,15 +54,13 @@ export default function NewRequestPage() {
     setError('');
     setSuccess('');
     setWarning('');
+    setExtractionWarnings([]);
     setExtracting(true);
 
     try {
-      // Step 1: Parse PDF
-      const pdfText = await parsePDFMutation.mutateAsync(uploadedFile);
+      // One call: rows + boxes from the PDF, structured lines, classification.
+      const extractionResult = await api.extraction.extractPdf(uploadedFile);
 
-      // Step 2: Extract structured data AND classify commodity group in one AI call
-      const extractionResult = await api.extraction.extract(pdfText);
-      
       if (!extractionResult.success || !extractionResult.data) {
         throw new Error(extractionResult.error || 'Failed to extract data');
       }
@@ -81,9 +72,11 @@ export default function NewRequestPage() {
       setVendorName(extracted.vendorName || '');
       setVatId(extracted.vatId || '');
       setDepartment(extracted.department || '');
-      setOrderLines(extracted.orderLines || []);
-      setTotalCost(extracted.totalCost || 0);
-      
+      setOrderLines(normalizeLines(extracted.orderLines || []));
+      setTaxTotal(extracted.taxTotal ?? 0);
+      setQuotedGrandTotal(extracted.totalCost || null);
+      setExtractionWarnings(extractionResult.warnings ?? []);
+
       // Set commodity group (now included in extraction)
       if (extracted.commodityGroupId) {
         setCommodityGroupId(extracted.commodityGroupId);
@@ -105,45 +98,6 @@ export default function NewRequestPage() {
     } finally {
       setExtracting(false);
     }
-  };
-
-  // Add order line manually
-  const addOrderLine = () => {
-    setOrderLines([
-      ...orderLines,
-      {
-        positionDescription: '',
-        unitPrice: 0,
-        amount: 1,
-        unit: '',
-        totalPrice: 0,
-      },
-    ]);
-  };
-
-  // Update order line
-  const updateOrderLine = (index: number, field: keyof OrderLine, value: string | number) => {
-    const updated = [...orderLines];
-    updated[index] = { ...updated[index], [field]: value };
-    
-    // Auto-calculate total price
-    if (field === 'unitPrice' || field === 'amount') {
-      updated[index].totalPrice = updated[index].unitPrice * updated[index].amount;
-    }
-    
-    setOrderLines(updated);
-    
-    // Update total cost
-    const newTotal = updated.reduce((sum, line) => sum + line.totalPrice, 0);
-    setTotalCost(newTotal);
-  };
-
-  // Remove order line
-  const removeOrderLine = (index: number) => {
-    const updated = orderLines.filter((_, i) => i !== index);
-    setOrderLines(updated);
-    const newTotal = updated.reduce((sum, line) => sum + line.totalPrice, 0);
-    setTotalCost(newTotal);
   };
 
   // Submit form
@@ -173,7 +127,9 @@ export default function NewRequestPage() {
         vendorName,
         vatId,
         commodityGroupId: commodityGroupId,
-        totalCost,
+        totalCost: totals.grand,
+        netTotal: totals.net,
+        taxTotal,
         department,
         orderLines,
       });
@@ -200,7 +156,7 @@ export default function NewRequestPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className={`${fileUrl ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto px-4 sm:px-6 lg:px-8 py-8`}>
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-semibold tracking-tight text-ink">New Procurement Request</h1>
@@ -213,7 +169,8 @@ export default function NewRequestPage() {
       {warning && <Alert variant="warning" className="mb-6">{warning}</Alert>}
       {success && <Alert variant="success" className="mb-6">{success}</Alert>}
 
-      <form onSubmit={handleSubmit} className="space-y-8">
+      <div className={fileUrl ? 'grid grid-cols-1 xl:grid-cols-2 gap-6 items-start' : ''}>
+      <form onSubmit={handleSubmit} className="space-y-8 min-w-0">
         {/* PDF Upload Section */}
         <div className="lio-card p-6">
           <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Upload Vendor Offer (Optional)</h2>
@@ -224,7 +181,7 @@ export default function NewRequestPage() {
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-accent-deep/50 transition-colors">
             <input
               type="file"
-              accept="application/pdf"
+              accept="application/pdf,.pdf"
               onChange={handleFileChange}
               className="hidden"
               id="pdf-upload"
@@ -354,96 +311,27 @@ export default function NewRequestPage() {
 
         {/* Order Lines */}
         <div className="lio-card p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight text-ink">Order Lines *</h2>
-            <Button type="button" onClick={addOrderLine} variant="outline" size="sm">
-              + Add Line
-            </Button>
-          </div>
-
-          {orderLines.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              No order lines yet. Add one to get started.
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {orderLines.map((line, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-start justify-between mb-4">
-                    <h3 className="text-sm font-medium text-gray-700">Line {index + 1}</h3>
-                    <button
-                      type="button"
-                      onClick={() => removeOrderLine(index)}
-                      className="text-red-600 hover:text-red-700 text-sm"
-                    >
-                      Remove
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                    <div className="lg:col-span-2">
-                      <Input
-                        label="Description"
-                        value={line.positionDescription}
-                        onChange={(e) =>
-                          updateOrderLine(index, 'positionDescription', e.target.value)
-                        }
-                        required
-                        placeholder="Item description"
-                      />
-                    </div>
-
-                    <Input
-                      label="Unit Price ($)"
-                      type="number"
-                      step="0.01"
-                      value={line.unitPrice}
-                      onChange={(e) =>
-                        updateOrderLine(index, 'unitPrice', parseFloat(e.target.value) || 0)
-                      }
-                      required
-                    />
-
-                    <Input
-                      label="Amount"
-                      type="number"
-                      step="0.01"
-                      value={line.amount}
-                      onChange={(e) =>
-                        updateOrderLine(index, 'amount', parseFloat(e.target.value) || 1)
-                      }
-                      required
-                    />
-
-                    <Input
-                      label="Unit"
-                      value={line.unit}
-                      onChange={(e) => updateOrderLine(index, 'unit', e.target.value)}
-                      required
-                      placeholder="pcs, licenses, etc."
-                    />
-                  </div>
-
-                  <div className="mt-2 text-right">
-                    <span className="text-sm text-gray-600">Total: </span>
-                    <span className="text-lg font-semibold tracking-tight text-ink">
-                      ${line.totalPrice.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Order Lines *</h2>
+          {extractionWarnings.length > 0 && (
+            <Alert variant="warning" className="mb-4">
+              <ul className="list-disc pl-4 space-y-0.5">
+                {extractionWarnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </Alert>
           )}
-        </div>
-
-        {/* Total Cost */}
-        <div className="bg-accent-soft/20 border-2 border-accent/40 rounded-lg p-6">
-          <div className="flex items-center justify-between">
-            <span className="text-lg font-medium text-gray-900">Total Cost</span>
-            <span className="text-3xl font-bold text-accent-deep">
-              ${totalCost.toFixed(2)}
-            </span>
-          </div>
+          <OrderLinesEditor
+            lines={orderLines}
+            taxTotal={taxTotal}
+            editable
+            quotedGrandTotal={quotedGrandTotal}
+            onChange={(lines, tax) => {
+              setOrderLines(lines);
+              setTaxTotal(tax);
+            }}
+            onShowSource={fileUrl ? (line) => docPanel.current?.showSource(line) : undefined}
+          />
         </div>
 
         {/* Submit */}
@@ -460,6 +348,12 @@ export default function NewRequestPage() {
           </Button>
         </div>
       </form>
+      {fileUrl && (
+        <div className="xl:sticky xl:top-6">
+          <DocumentPanel ref={docPanel} fileUrl={fileUrl} title={file?.name} />
+        </div>
+      )}
+      </div>
     </div>
   );
 }

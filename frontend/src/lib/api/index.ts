@@ -54,12 +54,41 @@ export interface MembersResponse {
   invites: OrganizationInvite[];
 }
 
+export type LineKind =
+  | 'item'
+  | 'surcharge'
+  | 'discount'
+  | 'shipping'
+  | 'fee'
+  | 'alternative'
+  | 'optional';
+
+/** Highlight box on a PDF page; coordinates are 0-1 fractions, origin top-left. */
+export interface SourceBox {
+  page: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 export interface OrderLineInput {
   positionDescription: string;
   unitPrice: number;
   amount: number;
   unit: string;
   totalPrice: number;
+  // Rich-line fields (all optional so hand-typed lines stay simple).
+  key?: string;
+  parentKey?: string | null;
+  kind?: LineKind;
+  position?: string | null;
+  vendorItemNumber?: string | null;
+  listUnitPrice?: number | null;
+  adjustmentPercent?: number | null;
+  sources?: SourceBox[];
+  sourceText?: string | null;
+  articleId?: string | null;
 }
 
 export interface CreateRequestInput {
@@ -69,6 +98,8 @@ export interface CreateRequestInput {
   vatId: string;
   commodityGroupId: number;
   totalCost: number;
+  netTotal?: number | null;
+  taxTotal?: number | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -80,6 +111,8 @@ export interface UpdateRequestInput {
   vatId: string;
   commodityGroupId: number;
   totalCost: number;
+  netTotal?: number | null;
+  taxTotal?: number | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -93,6 +126,11 @@ export interface ExtractedVendorData {
   totalCost: number;
   commodityGroupId: number | null;
   commodityGroupName: string | null;
+  quoteNumber?: string | null;
+  validUntil?: string | null;
+  currency?: string | null;
+  netTotal?: number | null;
+  taxTotal?: number | null;
 }
 
 export interface ExtractionResponse {
@@ -100,6 +138,7 @@ export interface ExtractionResponse {
   data?: ExtractedVendorData;
   error?: string;
   missingFields?: string[];
+  warnings?: string[];
 }
 
 export interface Supplier {
@@ -332,5 +371,11 @@ export const pdf = {
 export const extraction = {
   extract(text: string): Promise<ExtractionResponse> {
     return apiFetch('/extraction', { body: { text } });
+  },
+  /** Upload the PDF itself: rich lines with source highlights. */
+  extractPdf(file: File): Promise<ExtractionResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch('/extraction/pdf', { formData });
   },
 };
