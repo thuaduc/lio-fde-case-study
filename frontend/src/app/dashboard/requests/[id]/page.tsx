@@ -9,6 +9,7 @@ import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import type { ProcurementRequestWithDetails } from '@/types/database';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
+import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, linesForSave, normalizeLines } from '@/lib/orderLines';
 import { approvalLabel } from '@/lib/approval';
@@ -189,6 +190,7 @@ export default function RequestDetailPage() {
     department: header.department,
     taxTotal: tax,
     fieldSources: request?.fieldSources ?? null,
+    extractionWarnings: request ? normalizeWarnings(request.extractionWarnings) : null,
     quoteNumber: request?.quoteNumber ?? null,
     validUntil: request?.validUntil ?? null,
     orderLines: linesForSave(editorLines),
@@ -383,16 +385,12 @@ export default function RequestDetailPage() {
               }}
               onShowSource={pdfUrl ? (line) => docPanel.current?.showSource(line) : undefined}
             />
-            {(request.extractionWarnings?.length ?? 0) > 0 && (
-              <div className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                <p className="font-medium">Extraction notes</p>
-                <ul className="mt-1 list-disc pl-5">
-                  {request.extractionWarnings!.map((w) => (
-                    <li key={w}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <WarningList
+              className="mt-4"
+              title="Extraction notes"
+              warnings={normalizeWarnings(request.extractionWarnings)}
+              onShowSource={pdfUrl ? (sources) => docPanel.current?.showSource({ sources }) : undefined}
+            />
           </div>
 
           <div className="lio-card p-6">

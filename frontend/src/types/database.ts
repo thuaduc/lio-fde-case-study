@@ -71,7 +71,7 @@ export type ProcurementRequest = {
   currency?: string | null;
   netTotal?: number | null;
   taxTotal?: number | null;
-  extractionWarnings?: string[] | null;
+  extractionWarnings?: (import('@/lib/api').WarningDetail | string)[] | null;
   fieldSources?: import('@/lib/api').FieldSources | null;
 };
 

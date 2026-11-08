@@ -65,6 +65,12 @@ export type LineKind =
   | 'alternative'
   | 'optional';
 
+/** An extraction warning and the PDF boxes it refers to (empty when it has no location). */
+export interface WarningDetail {
+  message: string;
+  sources: SourceBox[];
+}
+
 /** Where header values (vendor, tax ID, ...) are printed in the PDF. */
 export type FieldSources = Partial<
   Record<'vendorName' | 'vatId' | 'department' | 'quoteNumber' | 'validUntil', SourceBox[]>
@@ -113,6 +119,7 @@ export interface CreateRequestInput {
   netTotal?: number | null;
   taxTotal?: number | null;
   fieldSources?: FieldSources | null;
+  extractionWarnings?: WarningDetail[] | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -129,6 +136,7 @@ export interface UpdateRequestInput {
   netTotal?: number | null;
   taxTotal?: number | null;
   fieldSources?: FieldSources | null;
+  extractionWarnings?: WarningDetail[] | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -156,6 +164,8 @@ export interface ExtractionResponse {
   error?: string;
   missingFields?: string[];
   warnings?: string[];
+  /** Same messages as `warnings`, each with where it comes from in the PDF. */
+  warningDetails?: WarningDetail[];
 }
 
 export interface Supplier {

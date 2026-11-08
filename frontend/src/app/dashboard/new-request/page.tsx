@@ -7,6 +7,7 @@ import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
+import WarningList, { normalizeWarnings } from '@/components/WarningList';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
 
@@ -23,7 +24,7 @@ interface DraftData {
   orderLines: Line[];
   taxTotal: number;
   quotedGrandTotal: number | null;
-  extractionWarnings: string[];
+  extractionWarnings: (api.WarningDetail | string)[];
   fieldSources: api.FieldSources;
   totalCost: number;
   /** Extraction finished for the draft's PDF (a draft saved mid-extraction resumes it). */
@@ -51,7 +52,7 @@ export default function NewRequestPage() {
   const [orderLines, setOrderLines] = useState<Line[]>([]);
   const [taxTotal, setTaxTotal] = useState<number>(0);
   const [quotedGrandTotal, setQuotedGrandTotal] = useState<number | null>(null);
-  const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
+  const [extractionWarnings, setExtractionWarnings] = useState<api.WarningDetail[]>([]);
   const [fieldSources, setFieldSources] = useState<api.FieldSources>({});
 
   /** Label row with an eye button when the field's value is located in the PDF. */
@@ -106,7 +107,7 @@ export default function NewRequestPage() {
           setOrderLines(normalizeLines(data.orderLines ?? []));
           setTaxTotal(data.taxTotal ?? 0);
           setQuotedGrandTotal(data.quotedGrandTotal ?? null);
-          setExtractionWarnings(data.extractionWarnings ?? []);
+          setExtractionWarnings(normalizeWarnings(data.extractionWarnings));
           setFieldSources(data.fieldSources ?? {});
           const wasExtracted = data.extracted ?? (data.orderLines?.length ?? 0) > 0;
           setExtracted(wasExtracted);
@@ -260,7 +261,9 @@ export default function NewRequestPage() {
       setOrderLines(normalizeLines(extracted.orderLines || []));
       setTaxTotal(extracted.taxTotal ?? 0);
       setQuotedGrandTotal(extracted.totalCost || null);
-      setExtractionWarnings(extractionResult.warnings ?? []);
+      setExtractionWarnings(
+        normalizeWarnings(extractionResult.warningDetails ?? extractionResult.warnings),
+      );
       setFieldSources(extracted.fieldSources ?? {});
 
       // Set commodity group (now included in extraction)
@@ -324,6 +327,7 @@ export default function NewRequestPage() {
         netTotal: totals.net,
         taxTotal,
         fieldSources,
+        extractionWarnings,
         department,
         orderLines: linesToSave,
       });
@@ -554,15 +558,11 @@ export default function NewRequestPage() {
         {/* Order Lines */}
         <div className="lio-card p-6">
           <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Order Lines *</h2>
-          {extractionWarnings.length > 0 && (
-            <Alert variant="warning" className="mb-4">
-              <ul className="list-disc pl-4 space-y-0.5">
-                {extractionWarnings.map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
-            </Alert>
-          )}
+          <WarningList
+            className="mb-4"
+            warnings={extractionWarnings}
+            onShowSource={fileUrl ? (sources) => docPanel.current?.showSource({ sources }) : undefined}
+          />
           <OrderLinesEditor
             lines={orderLines}
             taxTotal={taxTotal}
