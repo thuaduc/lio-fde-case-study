@@ -877,6 +877,10 @@ def to_extracted(
     group_id = primary_group(out)
     if group_id is None and q.commodity_group_id in groups:
         group_id = q.commodity_group_id
+    field_sources = resolve_field_sources(q, layout)
+    # The request's total traces to the quote's printed grand total.
+    if total_sources["grand"]:
+        field_sources["totalCost"] = total_sources["grand"]
     data = ExtractedVendorData(
         title=q.title or "",
         requestor_name=q.requestor_name or "",
@@ -892,7 +896,7 @@ def to_extracted(
         currency=q.currency,
         net_total=net,
         tax_total=tax,
-        field_sources=resolve_field_sources(q, layout),
+        field_sources=field_sources,
     )
     return data, warnings
 

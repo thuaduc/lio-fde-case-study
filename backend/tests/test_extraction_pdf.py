@@ -497,6 +497,20 @@ def test_requestor_field_source_resolved():
     assert data.field_sources["requestorName"] == [lt.rows[0].box]
 
 
+def test_total_cost_source_is_the_printed_grand_total():
+    lt = lay(wrow("n", "Net total $100.00", y0=0.3), wrow("g", "Grand total $150.00", y0=0.4))
+    q = quote([line(position="1", total_price=100.0)], net_total=100.0, tax_total=50.0,
+              grand_total=150.0, total_source_rows=tsr(net=["n"], grand=["g"]))
+    data, _ = svc.to_extracted(q, lt, GROUPS)
+    assert covered(lt, data.field_sources["totalCost"]) == ["$150.00"]
+
+
+def test_total_cost_without_a_printed_grand_total_has_no_source():
+    q = quote([line(position="1", total_price=100.0)], grand_total=None)
+    data, _ = conv(q)
+    assert "totalCost" not in data.field_sources
+
+
 def test_field_sources_omitted_when_value_null():
     lt = lay(mkrow("v", "EIN: 1"))
     q = quote([], vendor_tax_id=None, valid_until=None,

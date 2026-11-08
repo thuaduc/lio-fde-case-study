@@ -65,7 +65,8 @@ class ExtractedVendorData(BaseModel):
     net_total: float | None = Field(default=None, alias="netTotal")
     tax_total: float | None = Field(default=None, alias="taxTotal")
     # Header-field highlights keyed title/requestorName/vendorName/vatId/
-    # department/quoteNumber/validUntil; a key is present only when it has boxes.
+    # department/quoteNumber/validUntil/totalCost (the printed grand total); a
+    # key is present only when it has boxes.
     field_sources: dict[str, list[Box]] = Field(
         default_factory=dict, alias="fieldSources"
     )

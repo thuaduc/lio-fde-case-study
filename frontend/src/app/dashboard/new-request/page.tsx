@@ -15,6 +15,7 @@ import {
   type Line,
   computeTotals,
   linesForSave,
+  groupSources,
   missingGroupError,
   normalizeLines,
   primaryGroupId,
@@ -96,6 +97,7 @@ export default function NewRequestPage() {
     const g = commodityGroups?.find((x) => x.id === primaryGroup);
     return g ? `${g.category} · ${g.name}` : null;
   })();
+  const primaryGroupBoxes = groupSources(orderLines, primaryGroup);
 
   // ---- Drafts (server-side, Gmail-style): load ?draft=<id>, autosave, delete on submit.
   const [draftId, setDraftId] = useState<string | null>(null);
@@ -570,7 +572,16 @@ export default function NewRequestPage() {
           </div>
 
           <div>
-            <p className="mb-1.5 text-sm font-medium text-ink/70">Primary commodity group</p>
+            <div className="mb-1.5 flex h-5 items-center justify-between">
+              <span className="text-sm font-medium text-ink/70">Primary commodity group</span>
+              {fileUrl && primaryGroupBoxes.length > 0 && (
+                <SourceButton
+                  className="h-6 w-6 -my-0.5"
+                  label="Show the lines booked to this group in document"
+                  onClick={() => docPanel.current?.showSource({ sources: primaryGroupBoxes })}
+                />
+              )}
+            </div>
             <p className="text-sm text-ink">
               {primaryGroupLabel ?? (
                 <span className="text-ink/45">Set a group on the order lines below</span>
@@ -616,6 +627,11 @@ export default function NewRequestPage() {
             taxTotal={taxTotal}
             editable
             quotedGrandTotal={quotedGrandTotal}
+            onShowTotal={
+              fileUrl && fieldSources.totalCost?.length
+                ? () => docPanel.current?.showSource({ sources: fieldSources.totalCost })
+                : undefined
+            }
             onChange={(lines, tax) => {
               setOrderLines(lines);
               setTaxTotal(tax);

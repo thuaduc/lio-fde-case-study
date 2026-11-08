@@ -80,7 +80,9 @@ export type FieldSources = Partial<
     | 'vatId'
     | 'department'
     | 'quoteNumber'
-    | 'validUntil',
+    | 'validUntil'
+    /** The quote's printed grand total. */
+    | 'totalCost',
     SourceBox[]
   >
 >;

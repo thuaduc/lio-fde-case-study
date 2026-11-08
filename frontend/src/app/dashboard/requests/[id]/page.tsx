@@ -16,6 +16,7 @@ import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPa
 import {
   type Line,
   linesForSave,
+  groupSources,
   linesFromRequest as toEditorLines,
   missingGroupError,
   primaryGroupId,
@@ -265,6 +266,11 @@ export default function RequestDetailPage() {
     : undefined;
   const autoThreshold = typeof autoApprovedAt === 'number' ? autoApprovedAt : null;
   const showTitle = showField('title');
+  const showTotal = showField('totalCost');
+  const primaryGroupBoxes = groupSources(toEditorLines(request), request.commodity_group_id);
+  const showPrimaryGroup = pdfUrl && primaryGroupBoxes.length > 0
+    ? () => docPanel.current?.showSource({ sources: primaryGroupBoxes })
+    : undefined;
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -345,11 +351,14 @@ export default function RequestDetailPage() {
               />
               <Field
                 label="Primary commodity group"
+                onShow={showPrimaryGroup}
+                showLabel="Show the lines booked to this group in document"
                 value={request.commodity_groups
                   ? `${request.commodity_groups.category} · ${request.commodity_groups.name}`
                   : '—'}
               />
-              <Field label="Total Cost" value={usd(request.total_cost)} />
+              <Field label="Total Cost" value={usd(request.total_cost)} onShow={showTotal}
+                showLabel="Show quoted total in document" />
             </dl>
           </div>
 
@@ -393,6 +402,7 @@ export default function RequestDetailPage() {
               groups={commodityGroups}
               lines={lines}
               taxTotal={taxTotal}
+              onShowTotal={showTotal}
               editable={linesEditable}
               lockedReason="Lines can't be changed once the request is closed."
               onChange={(next, tax) => {
@@ -490,12 +500,24 @@ export default function RequestDetailPage() {
   );
 }
 
-function Field({ label, value, onShow }: { label: string; value: string; onShow?: () => void }) {
+function Field({ label, value, onShow, showLabel }: {
+  label: string;
+  value: string;
+  onShow?: () => void;
+  /** Tooltip for the eye button; defaults to "Show <label> in document". */
+  showLabel?: string;
+}) {
   return (
     <div>
       <dt className="flex h-5 items-center gap-1 text-ink/45 font-medium">
         {label}
-        {onShow && <SourceButton className="h-6 w-6 -my-0.5" label={`Show ${label.toLowerCase()} in document`} onClick={onShow} />}
+        {onShow && (
+          <SourceButton
+            className="h-6 w-6 -my-0.5"
+            label={showLabel ?? `Show ${label.toLowerCase()} in document`}
+            onClick={onShow}
+          />
+        )}
       </dt>
       <dd className="text-ink mt-0.5">{value}</dd>
     </div>

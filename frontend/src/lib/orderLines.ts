@@ -5,7 +5,7 @@
  *   parent or its parent is active;
  * - net = sum of active line totals; grand = net + tax.
  */
-import type { LineKind, OrderLineInput } from '@/lib/api';
+import type { LineKind, OrderLineInput, SourceBox } from '@/lib/api';
 import type { ProcurementRequestWithDetails } from '@/types/database';
 
 export type Line = OrderLineInput & {
@@ -146,6 +146,14 @@ export function primaryGroupId(lines: Line[]): number | null {
   let best: number | null = null;
   for (const [g, v] of spend) if (best === null || v > (spend.get(best) ?? 0)) best = g;
   return best;
+}
+
+/** Source boxes of the active lines booked to a group: where its spend comes from. */
+export function groupSources(lines: Line[], groupId: number | null | undefined): SourceBox[] {
+  if (groupId == null) return [];
+  return lines
+    .filter((l) => isActive(l, lines) && lineGroupId(l, lines) === groupId)
+    .flatMap((l) => l.sources ?? []);
 }
 
 /** The save error when an active line has no group (same wording as the server), else null. */

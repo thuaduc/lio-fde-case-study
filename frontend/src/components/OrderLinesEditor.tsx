@@ -65,6 +65,8 @@ export interface OrderLinesEditorProps {
   onShowSource?: (line: Line) => void;
   /** Grand total printed on the quote, for the "matches quote" check. */
   quotedGrandTotal?: number | null;
+  /** Highlight the quote's printed grand total. Omit when it is not located. */
+  onShowTotal?: () => void;
   /** Extra content under a line in read mode (e.g. catalog suggestions). */
   renderLineExtra?: (line: Line) => React.ReactNode;
   lockedReason?: string;
@@ -79,6 +81,7 @@ export default function OrderLinesEditor({
   onChange,
   onShowSource,
   quotedGrandTotal,
+  onShowTotal,
   renderLineExtra,
   lockedReason,
   groups,
@@ -426,7 +429,12 @@ export default function OrderLinesEditor({
             usd(taxTotal)
           )}
         </dd>
-        <dt className="text-right font-semibold text-ink">Total</dt>
+        <dt className="flex items-center justify-end gap-1 font-semibold text-ink">
+          {onShowTotal && (
+            <SourceButton className="h-6 w-6 -my-0.5" label="Show quoted total in document" onClick={onShowTotal} />
+          )}
+          Total
+        </dt>
         <dd className="text-right text-base font-semibold tabular-nums">{usd(totals.grand)}</dd>
         {diff != null && Math.abs(diff) >= 0.01 && (
           <dd className="col-span-2 text-right text-sm text-amber-700">

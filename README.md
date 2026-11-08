@@ -48,7 +48,9 @@ Requestor Name is prefilled with the person the quote is addressed to (e.g.
 "Prepared for"), unless you already typed one. Department is filled only when
 the quote names one. A value the AI worked out rather than copied links to what
 it came from: the title to the rows naming the purchase, a validity date
-computed from "valid for four weeks" to that sentence and the quote date.
+computed from "valid for four weeks" to that sentence and the quote date. The
+total links to the quote's printed grand total, and the primary commodity group
+to the lines booked to it.
 Drafts save automatically and can be resumed from Requests. Until a request is
 closed, you can edit its lines, swap alternatives and apply negotiated catalog
 prices. Catalog price replacement requires equivalent units; the app does not
@@ -77,6 +79,11 @@ If you previously ran this PR through migration `0011`, its schema is already
 current. After rebuilding the backend image, update only its revision marker:
 `docker compose run --rm --no-deps backend alembic stamp --purge 0007`.
 Fresh databases and databases at `0006` use the normal startup migration.
+
+Requests extracted before every field had a source highlight can get the
+missing ones from their stored PDFs. This re-runs extraction (needs the OpenAI
+key) but only adds highlights; stored values and highlights stay:
+`docker compose exec backend python -m app.backfill_field_sources`.
 
 ```bash
 docker compose up db        # Postgres only
