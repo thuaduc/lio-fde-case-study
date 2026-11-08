@@ -275,8 +275,8 @@ export default function NewRequestPage() {
       setVatId(extracted.vatId || '');
       setQuoteNumber(extracted.quoteNumber || '');
       setValidUntil(extracted.validUntil || '');
-      // Only a department the quote actually states replaces the default.
-      if (extracted.department) setDepartment(extracted.department);
+      // A replacement quote must not keep the previous document's department.
+      setDepartment(extracted.department || '');
       setOrderLines(normalizeLines(extracted.orderLines || []));
       setTaxTotal(extracted.taxTotal ?? 0);
       setQuotedGrandTotal(extracted.totalCost || null);

@@ -22,14 +22,14 @@ export function useCatalogSuggestions(lines: Line[], enabled: boolean) {
   );
 
   useEffect(() => {
+    const mine = ++seq.current;
+    setByKey({});
     if (!enabled || candidates.length === 0) {
-      setByKey({});
       setLoading(false);
       return;
     }
-    const mine = ++seq.current;
+    setLoading(true);
     const t = setTimeout(async () => {
-      setLoading(true);
       try {
         const res = await api.articles.suggestions(
           candidates.map((l) => ({
@@ -52,7 +52,10 @@ export function useCatalogSuggestions(lines: Line[], enabled: boolean) {
         if (mine === seq.current) setLoading(false);
       }
     }, 600);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      ++seq.current; // Ignore in-flight results after inputs change or unmount.
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, enabled]);
 
