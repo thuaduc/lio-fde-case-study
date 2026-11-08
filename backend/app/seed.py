@@ -136,6 +136,26 @@ def seed_articles(db: Session, organization_id: uuid.UUID) -> int:
     return len(new)
 
 
+# Per-org settings applied when the key is unset (never overwrites an admin's
+# choice). Acme asked for requests under $2,000 to skip buyer approval.
+ORG_DEFAULT_SETTINGS: dict[str, dict] = {"acme": {"approval_threshold": 2000}}
+
+
+def seed_org_settings(db: Session) -> int:
+    """Fill missing default settings keys; returns the number of orgs updated."""
+    updated = 0
+    for slug, defaults in ORG_DEFAULT_SETTINGS.items():
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is None:
+            continue
+        current = dict(org.settings or {})
+        missing = {k: v for k, v in defaults.items() if k not in current}
+        if missing:
+            org.settings = {**current, **missing}  # reassign so JSONB is dirtied
+            updated += 1
+    return updated
+
+
 def seed_organizations_and_accounts(db: Session) -> tuple[int, int]:
     """Create the tenants and their accounts (keyed by slug / email)."""
     orgs_created = 0
@@ -180,6 +200,7 @@ def seed(db: Session) -> dict[str, int]:
         # Articles reference suppliers by name, so this must run after suppliers.
         "articles": seed_articles(db, dev_org_id) if dev_org_id else 0,
         "organizations": orgs_created,
+        "org_settings": seed_org_settings(db),
         "users": users_created,
     }
     db.commit()

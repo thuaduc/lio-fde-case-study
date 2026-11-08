@@ -21,6 +21,9 @@ class OrganizationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     required_fields: list[ConfigurableRequiredField] = Field(default_factory=list)
+    # Requests whose grand total (incl. tax) is strictly below this amount are
+    # approved automatically. None = every request needs a buyer's sign-off.
+    approval_threshold: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class OrganizationCreate(BaseModel):

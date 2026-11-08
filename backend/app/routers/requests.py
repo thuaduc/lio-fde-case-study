@@ -101,10 +101,39 @@ def _enforce_required_fields(
         )
 
 
+def _approval_threshold(db: Session, organization_id: uuid.UUID) -> float | None:
+    """The org's auto-approval threshold (see OrganizationSettings), or None."""
+    org = db.get(Organization, organization_id)
+    value = (org.settings or {}).get("approval_threshold") if org else None
+    return None if value is None else float(value)
+
+
+def _below_threshold(grand_total: float, threshold: float | None) -> bool:
+    return threshold is not None and round(grand_total, 2) < round(threshold, 2)
+
+
+def _auto_approve(
+    db: Session, request: ProcurementRequest, grand_total: float, threshold: float
+) -> None:
+    """Approve a request on the org's threshold: no approver, logged as system."""
+    request.approval_status = "approved"
+    request.approved_by = None
+    request.approved_at = datetime.now(timezone.utc)
+    _log_activity(
+        db,
+        request.id,
+        None,
+        "auto_approved",
+        f"Auto-approved: total ${grand_total:,.2f} is below the "
+        f"${threshold:,.2f} threshold",
+        {"total": round(grand_total, 2), "threshold": threshold},
+    )
+
+
 def _log_activity(
     db: Session,
     request_id: uuid.UUID,
-    actor_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
     action: str,
     summary: str,
     detail: dict | None = None,
@@ -408,6 +437,9 @@ def create_request(
     db.add(request)
     db.flush()
     _log_activity(db, request.id, membership.user_id, "created", "Request created")
+    threshold = _approval_threshold(db, membership.organization_id)
+    if _below_threshold(grand_total, threshold):
+        _auto_approve(db, request, grand_total, threshold)
     if draft is not None:
         if draft.document is not None:
             _attach_document(
@@ -454,10 +486,19 @@ def update_request(
 
     changed = _changed_fields(request, payload, lines, grand_total, tax_total)
 
-    # A changed grand total invalidates an earlier approval.
+    # A changed grand total re-evaluates the approval: below the org's
+    # threshold it is auto-approved, otherwise an earlier approval is reset.
+    # Rejections stand either way.
     old_total = round(float(request.total_cost or 0), 2)
-    approval_reset = request.approval_status == "approved" and old_total != round(
-        grand_total, 2
+    total_changed = old_total != round(grand_total, 2)
+    threshold = _approval_threshold(db, membership.organization_id)
+    auto_approve = (
+        total_changed
+        and request.approval_status != "rejected"
+        and _below_threshold(grand_total, threshold)
+    )
+    approval_reset = (
+        total_changed and not auto_approve and request.approval_status == "approved"
     )
 
     request.requestor_name = payload.requestor_name
@@ -489,7 +530,9 @@ def update_request(
         db.flush()
         request.order_lines = _build_lines(lines)
 
-    if approval_reset:
+    if auto_approve:
+        _auto_approve(db, request, grand_total, threshold)
+    elif approval_reset:
         request.approval_status = "pending"
         request.approved_by = None
         request.approved_at = None

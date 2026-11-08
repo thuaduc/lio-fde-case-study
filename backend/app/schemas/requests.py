@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.schemas.extraction import LineKind
 from app.services.pdf_layout import Box
@@ -196,3 +196,9 @@ class RequestOut(BaseModel):
     commodity_groups: CommodityGroupOut | None = Field(
         default=None, validation_alias="commodity_group"
     )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def auto_approved(self) -> bool:
+        """Approved by the organization's approval threshold, not by a person."""
+        return self.approval_status == "approved" and self.approved_by is None
