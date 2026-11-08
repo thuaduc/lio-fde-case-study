@@ -391,6 +391,7 @@ export default function RequestDetailPage() {
                   line={line}
                   currency={request.currency || 'USD'}
                   editable={linesEditable}
+                  showReplace={false}
                   onRestore={() => {
                     setLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
                     setLinesDirty(true);
