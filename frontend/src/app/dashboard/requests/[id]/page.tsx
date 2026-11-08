@@ -54,7 +54,8 @@ export default function RequestDetailPage() {
   const [taxTotal, setTaxTotal] = useState(0);
   const [linesDirty, setLinesDirty] = useState(false);
   const docPanel = useRef<DocumentPanelHandle>(null);
-  const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(lines, request?.status === 'open');
+  const linesEditable = !!request && request.status !== 'closed';
+  const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(lines, linesEditable);
   const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
 
   /** Click handler that highlights one header field, when its location is known. */
@@ -227,7 +228,7 @@ export default function RequestDetailPage() {
         saved.auto_approved && !request.auto_approved
           ? 'Lines saved. The new total is below the approval threshold, so the request was approved automatically.'
           : wasApproved && saved.approval_status === 'pending'
-            ? 'Lines saved. The total changed, so the request is pending approval again.'
+            ? 'Lines saved. The total changed, so the request is open and pending approval again.'
             : 'Lines saved.',
       );
     } catch (err) {
@@ -364,8 +365,8 @@ export default function RequestDetailPage() {
             </div>
             {linesDirty && request.approval_status === 'approved' && (
               <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                This request is approved. If saving changes the total, it goes back to pending approval
-                unless the new total is below your organization&apos;s approval threshold.
+                This request is approved. If saving changes the total, it goes back to Open and pending
+                approval unless the new total is below your organization&apos;s approval threshold.
               </p>
             )}
             {catalogLoading && (
@@ -375,7 +376,7 @@ export default function RequestDetailPage() {
               renderLineExtra={(line) => (
                 <CatalogSuggestion
                   line={line}
-                  editable={request.status === 'open'}
+                  editable={linesEditable}
                   suggestions={catalog[line.key]}
                   applied={line.articleId ? appliedArticles[line.articleId] : undefined}
                   onApply={(s) => {
@@ -388,8 +389,8 @@ export default function RequestDetailPage() {
               groups={commodityGroups}
               lines={lines}
               taxTotal={taxTotal}
-              editable={request.status === 'open'}
-              lockedReason="Lines can only be changed while the request is open."
+              editable={linesEditable}
+              lockedReason="Lines can't be changed once the request is closed."
               onChange={(next, tax) => {
                 setLines(next);
                 setTaxTotal(tax);

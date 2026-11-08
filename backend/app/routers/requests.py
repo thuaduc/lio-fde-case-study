@@ -216,6 +216,44 @@ def _auto_approve(
         f"${threshold:,.2f} threshold",
         {"total": round(grand_total, 2), "threshold": threshold},
     )
+    _status_follows_approval(db, request, None)
+
+
+def _set_status(
+    db: Session,
+    request: ProcurementRequest,
+    new_status: str,
+    actor_id: uuid.UUID | None,
+) -> None:
+    """Change the request's status and log it; a no-op when it already has it."""
+    if request.status == new_status:
+        return
+    _log_activity(
+        db,
+        request.id,
+        actor_id,
+        "status_changed",
+        f"Status changed from {request.status} to {new_status}",
+        {"from": request.status, "to": new_status},
+    )
+    request.status = new_status
+
+
+def _status_follows_approval(
+    db: Session, request: ProcurementRequest, actor_id: uuid.UUID | None
+) -> None:
+    """Move the status along after an approval decision.
+
+    Approval moves an open request in progress, rejection closes it, and a reset
+    to pending reopens a request in progress. A request someone closed stays
+    closed.
+    """
+    if request.approval_status == "approved" and request.status == "open":
+        _set_status(db, request, "in_progress", actor_id)
+    elif request.approval_status == "rejected":
+        _set_status(db, request, "closed", actor_id)
+    elif request.approval_status == "pending" and request.status == "in_progress":
+        _set_status(db, request, "open", actor_id)
 
 
 def _log_activity(
@@ -580,12 +618,13 @@ def update_request(
     )
     net_total, grand_total = compute_totals(lines, tax_total)
 
-    # Order lines are only editable while the request is open.
+    # Order lines stay editable until the request is closed. Approval moves a
+    # request in progress, so an approved request's lines remain editable.
     lines_changed = _stored_signature(request) != _order_lines_signature(lines)
-    if request.status != "open" and lines_changed:
+    if request.status == "closed" and lines_changed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Order lines can only be edited while the request is open.",
+            detail="Order lines can't be edited once the request is closed.",
         )
 
     changed = _changed_fields(
@@ -650,6 +689,7 @@ def update_request(
             "Approval reset: total changed",
             {"from": old_total, "to": grand_total},
         )
+        _status_follows_approval(db, request, membership.user_id)
 
     if changed:
         labels = [_FIELD_LABELS.get(f, f) for f in changed]
@@ -677,15 +717,7 @@ def update_status(
     request = _get_org_request(db, request_id, membership.organization_id)
 
     if request.status != payload.status:
-        _log_activity(
-            db,
-            request.id,
-            membership.user_id,
-            "status_changed",
-            f"Status changed from {request.status} to {payload.status}",
-            {"from": request.status, "to": payload.status},
-        )
-        request.status = payload.status
+        _set_status(db, request, payload.status, membership.user_id)
         db.commit()
 
     request = _get_org_request(db, request_id, membership.organization_id)
@@ -718,6 +750,7 @@ def decide_approval(
         payload.decision,
         f"Request {payload.decision}",
     )
+    _status_follows_approval(db, request, membership.user_id)
     db.commit()
 
     request = _get_org_request(db, request_id, membership.organization_id)

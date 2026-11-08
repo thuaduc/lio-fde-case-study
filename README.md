@@ -38,10 +38,14 @@ at or above that amount need a buyer or admin (see the **Approvals** tab). Admin
 can change or disable the threshold in Organization settings. A price edit that
 changes an approved request's total re-evaluates its approval.
 
+Status follows approval: an approved request moves from Open to In progress, and a
+rejected one is closed. If an edit sends an approved request back to pending, it
+reopens. Anyone can still change the status by hand.
+
 The PDF form extracts items, discounts, charges and alternatives, with eye
 buttons linking fields, warnings and lines to their source boxes in the PDF.
-Drafts save automatically and can be resumed from Requests. While a request is
-open, you can edit its lines, swap alternatives and apply negotiated catalog
+Drafts save automatically and can be resumed from Requests. Until a request is
+closed, you can edit its lines, swap alternatives and apply negotiated catalog
 prices. Catalog price replacement requires equivalent units; the app does not
 convert a whole panel to square feet or infer quantities for an unknown unit.
 

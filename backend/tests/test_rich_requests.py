@@ -1,4 +1,4 @@
-"""Rich order lines: persistence, server totals, link validation, open-only
+"""Rich order lines: persistence, server totals, link validation, closed-locked
 editing and approval reset. TestClient over in-memory SQLite."""
 import uuid
 
@@ -266,10 +266,10 @@ def _echo(body):
     return out
 
 
-def test_update_lines_when_not_open_409(client, auth):
+def test_update_lines_when_closed_409(client, auth):
     body = _make(client, auth)
     rid = body["id"]
-    client.patch(f"/requests/{rid}/status", json={"status": "in_progress"}, headers=auth)
+    client.patch(f"/requests/{rid}/status", json={"status": "closed"}, headers=auth)
     changed = _echo(body)
     changed[0]["amount"] = 5
     r = put(client, auth, rid, changed)
@@ -286,7 +286,7 @@ def test_update_header_only_keeps_lines(client, auth):
     ]
     body = _make(client, auth, lines)
     rid = body["id"]
-    client.patch(f"/requests/{rid}/status", json={"status": "in_progress"}, headers=auth)
+    client.patch(f"/requests/{rid}/status", json={"status": "closed"}, headers=auth)
     r = put(client, auth, rid, _echo(body), requestorName="Someone Else")
     assert r.status_code == 200, r.text
     out = r.json()
@@ -309,10 +309,12 @@ def test_approved_total_change_resets_approval(client, auth):
     _approve(client, auth, rid)
     changed = _echo(body)
     changed[0]["amount"] = 3
+    # Approval moved the request to in_progress; its lines stay editable.
     r = put(client, auth, rid, changed)
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["approval_status"] == "pending"
+    assert out["status"] == "open"
     assert out["approved_by"] is None and out["approved_at"] is None
     assert ("approval_reset", "Approval reset: total changed") in actions(rid)
 
@@ -351,7 +353,7 @@ def test_fractional_list_price_round_trips(client, auth):
     body = _make(client, auth, lines)
     rid = body["id"]
     assert body["order_lines"][0]["listUnitPrice"] == 0.14
-    client.patch(f"/requests/{rid}/status", json={"status": "in_progress"}, headers=auth)
+    client.patch(f"/requests/{rid}/status", json={"status": "closed"}, headers=auth)
     r = put(client, auth, rid, _echo(body), requestorName="Other")
     assert r.status_code == 200, r.text
     assert r.json()["order_lines"] == body["order_lines"]

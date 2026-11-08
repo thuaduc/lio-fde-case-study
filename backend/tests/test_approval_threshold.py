@@ -263,6 +263,10 @@ def test_rejected_stays_rejected(client, requester, buyer):
     client.patch(
         f"/requests/{req['id']}/approval", json={"decision": "rejected"}, headers=buyer
     )
+    # Rejection closes the request; reopen it to edit the lines.
+    client.patch(
+        f"/requests/{req['id']}/status", json={"status": "open"}, headers=requester
+    )
     req = _update(client, requester, req, 1500)
     assert req["approval_status"] == "rejected"
     assert req["auto_approved"] is False
@@ -294,3 +298,73 @@ def test_deciding_auto_approved_request_conflicts(client, requester, buyer):
         f"/requests/{req['id']}/approval", json={"decision": "rejected"}, headers=buyer
     )
     assert r.status_code == 409
+
+
+# --- status follows approval ------------------------------------------------
+
+
+def _decide(client, headers, request, decision):
+    r = client.patch(
+        f"/requests/{request['id']}/approval", json={"decision": decision}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _status_changes(client, headers, request_id):
+    return [
+        (a["detail"]["from"], a["detail"]["to"], a["actor_id"])
+        for a in client.get(f"/requests/{request_id}/activity", headers=headers).json()
+        if a["action"] == "status_changed"
+    ]
+
+
+def test_pending_request_stays_open(client, requester):
+    req = _create(client, requester, 2500)
+    assert req["status"] == "open"
+    assert _status_changes(client, requester, req["id"]) == []
+
+
+def test_auto_approval_moves_request_in_progress(client, requester):
+    req = _create(client, requester, 1000)
+    assert req["status"] == "in_progress"
+    assert _status_changes(client, requester, req["id"]) == [("open", "in_progress", None)]
+
+
+def test_buyer_approval_moves_request_in_progress(client, requester, buyer):
+    req = _decide(client, buyer, _create(client, requester, 2500), "approved")
+    assert req["status"] == "in_progress"
+    assert _status_changes(client, requester, req["id"]) == [
+        ("open", "in_progress", req["approved_by"])
+    ]
+
+
+def test_rejection_closes_request(client, requester, buyer):
+    req = _decide(client, buyer, _create(client, requester, 2500), "rejected")
+    assert req["status"] == "closed"
+    assert _status_changes(client, requester, req["id"]) == [
+        ("open", "closed", req["approved_by"])
+    ]
+
+
+def test_approval_reset_reopens_request(client, requester):
+    req = _create(client, requester, 1000)
+    assert req["status"] == "in_progress"
+    req = _update(client, requester, req, 2500)
+    assert req["approval_status"] == "pending"
+    assert req["status"] == "open"
+
+
+def test_auto_approval_on_update_moves_request_in_progress(client, requester):
+    req = _create(client, requester, 2500)
+    req = _update(client, requester, req, 1500)
+    assert req["status"] == "in_progress"
+
+
+def test_approval_keeps_a_manually_closed_status(client, requester, buyer):
+    req = _create(client, requester, 2500)
+    r = client.patch(
+        f"/requests/{req['id']}/status", json={"status": "closed"}, headers=requester
+    )
+    assert r.status_code == 200, r.text
+    assert _decide(client, buyer, req, "approved")["status"] == "closed"
