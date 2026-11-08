@@ -29,13 +29,12 @@ export function restoreArticle(line: Line): Line {
     : line;
 }
 
-export default function CatalogSuggestion({ line, suggestions, applied, editable, onApply, onRestore, showReplace = true, currency = 'USD' }: {
+export default function CatalogSuggestion({ line, suggestions, applied, editable, onApply, onRestore, currency = 'USD' }: {
   line: Line;
   currency?: string;
   suggestions?: api.ArticleSuggestion[];
   applied?: api.ArticleSuggestion;
   editable: boolean;
-  showReplace?: boolean;
   onApply: (s: api.ArticleSuggestion, amount: number) => void;
   onRestore: () => void;
 }) {
@@ -109,8 +108,8 @@ export default function CatalogSuggestion({ line, suggestions, applied, editable
           {applied?.articleNumber || line.vendorItemNumber || 'View catalog article'} ↗
         </Link>{applied?.supplierName && <span className="text-ink/55"> · {applied.supplierName}</span>}
       </p>}
-      {canReplace && (showReplace || line.originalQuote) && <div className="flex flex-wrap items-center gap-3">
-        {showReplace && <button type="button" className="rounded-lg border border-line px-3 py-1.5 font-medium hover:bg-canvas" onClick={browse}>Replace from catalog</button>}
+      {canReplace && <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className="rounded-lg border border-line px-3 py-1.5 font-medium hover:bg-canvas" onClick={browse}>Replace from catalog</button>
         {line.originalQuote && <button type="button" className="text-accent-deep hover:underline" onClick={onRestore}>Restore quoted item</button>}
       </div>}
       {canReplace && !line.articleId && suggestions?.map((s) => <div key={s.articleId} className="rounded-lg bg-accent-soft/20 px-3 py-2">
