@@ -161,7 +161,10 @@ export default function OrderLinesEditor({
       >
         <div className="flex items-start justify-between gap-3">
           <div className={cn('min-w-0', line.removed && 'text-ink/40 line-through')}>
-            <p className={cn('text-sm', line.removed ? 'text-ink/40' : 'text-ink', line.kind === 'item' && 'font-medium')}>
+            <p
+              title={line.positionDescription}
+              className={cn('line-clamp-2 text-sm', line.removed ? 'text-ink/40' : 'text-ink', line.kind === 'item' && 'font-medium')}
+            >
               {line.position && <span className="text-ink/45">{line.position} · </span>}
               {line.positionDescription || <span className="text-ink/40">Untitled line</span>}
               {line.kind !== 'item' && (
