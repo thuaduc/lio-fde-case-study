@@ -9,6 +9,20 @@ ACTIVE_EXCLUDED = ("alternative", "optional")
 ADJUSTMENTS = ("discount", "surcharge", "shipping", "fee")
 
 
+def parent_allowed(kind: str, parent_kind: str) -> bool:
+    """Whether a line of ``kind`` may point at a parent of ``parent_kind``.
+
+    The one definition of the by-kind parent rule: an item has no parent;
+    alternative and optional need an item; discount, surcharge, shipping and fee
+    may attach to an item, alternative or optional (never to another adjustment).
+    """
+    if kind == "item":
+        return False
+    if kind in ACTIVE_EXCLUDED:
+        return parent_kind == "item"
+    return parent_kind not in ADJUSTMENTS
+
+
 def active_keys(lines) -> set[str]:
     """Keys of active lines: not alternative/optional, and no inactive ancestor."""
     by_key = {ln.key: ln for ln in lines}

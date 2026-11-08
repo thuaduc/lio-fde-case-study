@@ -32,6 +32,7 @@ from app.services.line_links import (
     ADJUSTMENTS,
     active_keys,
     inherited_groups,
+    parent_allowed,
     primary_group,
 )
 
@@ -313,15 +314,15 @@ def _validate_links(lines: list[OrderLineIn]) -> None:
             raise _unprocessable(
                 f"{label} references unknown parent {line.parent_key!r}"
             )
-        if line.kind == "item":
-            raise _unprocessable(f"{label} cannot have a parent")
-        if line.kind in ("alternative", "optional") and parent.kind != "item":
+        if not parent_allowed(line.kind, parent.kind):
+            if line.kind == "item":
+                raise _unprocessable(f"{label} cannot have a parent")
+            if line.kind in ADJUSTMENTS:
+                raise _unprocessable(
+                    f"{label} cannot be attached to another adjustment ({parent.key!r})"
+                )
             raise _unprocessable(
                 f"{label} must belong to an item, but parent {parent.key!r} is a {parent.kind}"
-            )
-        if line.kind in ADJUSTMENTS and parent.kind in ADJUSTMENTS:
-            raise _unprocessable(
-                f"{label} cannot be attached to another adjustment ({parent.key!r})"
             )
 
 

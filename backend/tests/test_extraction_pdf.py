@@ -1026,3 +1026,62 @@ def test_verdeform_unpriced_charges_boxed(quote_bytes):
         LlmUnpricedCharge(text="Rush surcharge", source_rows=rush)])
     _, details = svc.to_extracted(q, lt, GROUPS)
     assert len(details) == 2 and all(d.sources for d in details)
+
+
+# --- parent rule (I1) ---
+
+
+def _kinds(data):
+    return {ln.key: (ln.kind, ln.parent_key) for ln in data.order_lines}
+
+
+@pytest.mark.parametrize(
+    "child_kind,parent_kind",
+    [("optional", "alternative"), ("optional", "optional"),
+     ("discount", "discount"), ("fee", "shipping"), ("alternative", "optional")],
+)
+def test_illegal_parent_dropped_with_warning(child_kind, parent_kind):
+    q = quote([
+        line(position="1"),
+        line(position="2", kind=parent_kind, parent_position="1"),
+        line(position="3", kind=child_kind, parent_position="2"),
+    ])
+    data, warnings = conv(q)
+    kinds = _kinds(data)
+    assert kinds["3"][1] is None
+    assert any(w.message.startswith("Line 3:") and "not linked" in w.message
+               for w in warnings)
+
+
+def test_legal_parent_kept_without_warning():
+    q = quote([
+        line(position="1"),
+        line(position="2", kind="alternative", parent_position="1"),
+        line(position="3", kind="discount", parent_position="2"),
+    ])
+    data, warnings = conv(q)
+    assert _kinds(data)["3"] == ("discount", "2")
+    assert not any("not linked" in w.message for w in warnings)
+
+
+def test_orphan_alternative_becomes_optional_with_warning():
+    q = quote([line(position="1"), line(position="2", kind="alternative")])
+    data, warnings = conv(q)
+    assert _kinds(data)["2"] == ("optional", None)
+    assert any(w.message.startswith("Line 2:") and "optional" in w.message
+               for w in warnings)
+
+
+def test_illegal_link_warning_carries_line_sources():
+    layout = PdfLayout(
+        rows=[PdfRow(id="r1", page=1, text="x", box=Box(page=1, x0=0.1, y0=0.1, x1=0.9, y1=0.12), words=[])],
+        page_count=1,
+    )
+    q = quote([
+        line(position="1"),
+        line(position="2", kind="alternative", parent_position="1"),
+        line(position="3", kind="optional", parent_position="2", source_rows=["r1"]),
+    ])
+    _, warnings = svc.to_extracted(q, layout, GROUPS)
+    w = next(w for w in warnings if "not linked" in w.message)
+    assert w.sources

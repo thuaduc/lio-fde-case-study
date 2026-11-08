@@ -20,7 +20,12 @@ from app.schemas.extraction import (
     LlmQuote,
 )
 from app.services.commodity_groups import active_groups
-from app.services.line_links import active_keys, inherited_groups, primary_group
+from app.services.line_links import (
+    active_keys,
+    inherited_groups,
+    parent_allowed,
+    primary_group,
+)
 from app.services.pdf_layout import (
     Box,
     PdfLayout,
@@ -733,6 +738,7 @@ def to_extracted(
     warnings: list[WarningDetail] = []
     kept = [ln for ln in q.lines if ln.kind != "heading"]
     keys, pos_to_key = _unique_keys(kept)
+    kind_by_key = {key: ln.kind for ln, key in zip(kept, keys)}
 
     out: list[ExtractedLine] = []
     for ln, key in zip(kept, keys):
@@ -752,8 +758,25 @@ def to_extracted(
                 ))
             elif parent_key == key:
                 parent_key = None
+            elif not parent_allowed(kind, kind_by_key[parent_key]):
+                warnings.append(WarningDetail(
+                    message=(
+                        f"Line {key}: a {kind} can't belong to a "
+                        f"{kind_by_key[parent_key]} (line {parent_key}); "
+                        "treated as not linked"
+                    ),
+                    sources=boxes,
+                ))
+                parent_key = None
         if kind == "alternative" and parent_key is None:
             kind = "optional"
+            warnings.append(WarningDetail(
+                message=(
+                    f"Line {key}: alternative without an item to replace; "
+                    "treated as optional"
+                ),
+                sources=boxes,
+            ))
         unit_price, amount, total = _line_numbers(ln)
         if ln.total_price is not None and ln.quantity and unit_price:
             expected = _round(ln.quantity * unit_price)
