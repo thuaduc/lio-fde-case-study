@@ -97,6 +97,8 @@ export interface OrderLineInput {
 }
 
 export interface CreateRequestInput {
+  /** Create from this draft: the server moves its PDF to the request and deletes it. */
+  draftId?: string | null;
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
@@ -361,6 +363,51 @@ export const articles = {
 
   count(): Promise<{ count: number }> {
     return apiFetch('/articles/count');
+  },
+};
+
+// ============================================================================
+// Drafts (server-side, private to their creator; Gmail-style autosave)
+// ============================================================================
+
+export interface DraftSummary {
+  id: string;
+  title: string | null;
+  vendorName: string | null;
+  totalCost: number | null;
+  fileName: string | null;
+  hasDocument: boolean;
+  updatedAt: string;
+}
+
+export interface DraftOut<T = Record<string, unknown>> extends DraftSummary {
+  data: T;
+}
+
+export const drafts = {
+  list(): Promise<DraftSummary[]> {
+    return apiFetch('/drafts');
+  },
+  get<T>(id: string): Promise<DraftOut<T>> {
+    return apiFetch(`/drafts/${id}`);
+  },
+  create<T>(data: T): Promise<DraftOut<T>> {
+    return apiFetch('/drafts', { body: { data } });
+  },
+  update<T>(id: string, data: T): Promise<DraftSummary> {
+    return apiFetch(`/drafts/${id}`, { method: 'PUT', body: { data } });
+  },
+  uploadDocument(id: string, file: File): Promise<void> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/drafts/${id}/document`, { method: 'PUT', formData });
+  },
+  /** Object URL of the draft's PDF, or null when it has none. */
+  documentUrl(id: string): Promise<string | null> {
+    return apiFetchObjectUrl(`/drafts/${id}/document`);
+  },
+  delete(id: string): Promise<void> {
+    return apiFetch(`/drafts/${id}`, { method: 'DELETE' });
   },
 };
 

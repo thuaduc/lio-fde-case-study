@@ -19,6 +19,24 @@ const readLastDepartment = () => {
   }
 };
 
+/** Everything a draft keeps (the PDF is stored separately as the draft's document). */
+interface DraftData {
+  requestorName: string;
+  title: string;
+  vendorName: string;
+  vatId: string;
+  department: string;
+  commodityGroupId: number | null;
+  orderLines: Line[];
+  taxTotal: number;
+  quotedGrandTotal: number | null;
+  extractionWarnings: string[];
+  fieldSources: api.FieldSources;
+  totalCost: number;
+}
+
+type SaveState = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: string } | { kind: 'error' };
+
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
 export default function NewRequestPage() {
@@ -54,16 +72,84 @@ export default function NewRequestPage() {
   );
   const totals = computeTotals(orderLines, taxTotal);
 
-  // Requestor defaults to the signed-in user; department to the one they used last.
+  // ---- Drafts (server-side, Gmail-style): load ?draft=<id>, autosave, delete on submit.
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const draftIdRef = useRef<string | null>(null);
+  const creatingDraft = useRef<Promise<string> | null>(null);
+  const [draftDocUploaded, setDraftDocUploaded] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
+  const submitted = useRef(false);
+
+  const rememberDraftId = (id: string) => {
+    draftIdRef.current = id;
+    setDraftId(id);
+    // Keep the URL shareable with yourself: a refresh reopens this draft.
+    window.history.replaceState(null, '', `/dashboard/new-request?draft=${id}`);
+  };
+
   useEffect(() => {
-    api.auth
-      .me()
-      .then(({ user, profile }) =>
-        setRequestorName((cur) => cur || profile?.full_name || user.email),
-      )
-      .catch(() => {});
-    setDepartment((cur) => cur || readLastDepartment());
+    (async () => {
+      const id = new URLSearchParams(window.location.search).get('draft');
+      if (id) {
+        try {
+          const d = await api.drafts.get<DraftData>(id);
+          const data = d.data;
+          setRequestorName(data.requestorName ?? '');
+          setTitle(data.title ?? '');
+          setVendorName(data.vendorName ?? '');
+          setVatId(data.vatId ?? '');
+          setDepartment(data.department ?? '');
+          setCommodityGroupId(data.commodityGroupId ?? null);
+          setOrderLines(normalizeLines(data.orderLines ?? []));
+          setTaxTotal(data.taxTotal ?? 0);
+          setQuotedGrandTotal(data.quotedGrandTotal ?? null);
+          setExtractionWarnings(data.extractionWarnings ?? []);
+          setFieldSources(data.fieldSources ?? {});
+          if (d.hasDocument) {
+            const url = await api.drafts.documentUrl(id);
+            if (url) {
+              const blob = await (await fetch(url)).blob();
+              URL.revokeObjectURL(url);
+              setFile(new File([blob], d.fileName ?? 'document.pdf', { type: 'application/pdf' }));
+              setDraftDocUploaded(true);
+            }
+          }
+          rememberDraftId(id);
+          setSaveState({ kind: 'saved', at: d.updatedAt });
+        } catch {
+          setError('This draft no longer exists. Starting a new request.');
+          window.history.replaceState(null, '', '/dashboard/new-request');
+        }
+      } else {
+        // Requestor defaults to the signed-in user; department to the one they used last.
+        try {
+          const { user, profile } = await api.auth.me();
+          setRequestorName((cur) => cur || profile?.full_name || user.email);
+        } catch {
+          // no default
+        }
+        setDepartment((cur) => cur || readLastDepartment());
+      }
+      setLoaded(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Draft id, creating the draft on first need (only one create in flight). */
+  const ensureDraft = async (data: DraftData): Promise<string> => {
+    if (draftIdRef.current) return draftIdRef.current;
+    if (!creatingDraft.current) {
+      creatingDraft.current = api.drafts.create(data).then((d) => {
+        rememberDraftId(d.id);
+        return d.id;
+      });
+      creatingDraft.current.catch(() => {
+        creatingDraft.current = null;
+      });
+    }
+    return creatingDraft.current;
+  };
 
   // Document panel (side-by-side PDF with search-to-highlight)
   const docPanel = useRef<DocumentPanelHandle>(null);
@@ -77,6 +163,54 @@ export default function NewRequestPage() {
 
   const fileUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
+  const draftData: DraftData = {
+    requestorName, title, vendorName, vatId, department, commodityGroupId, orderLines,
+    taxTotal, quotedGrandTotal, extractionWarnings, fieldSources, totalCost: totals.grand,
+  };
+
+  // Autosave ~1s after the last change, once there is something worth keeping.
+  const draftJson = JSON.stringify(draftData);
+  useEffect(() => {
+    if (!loaded || submitted.current) return;
+    const worthKeeping = !!file || orderLines.length > 0 || !!title || !!vendorName;
+    if (!worthKeeping) return;
+    const t = setTimeout(async () => {
+      setSaveState({ kind: 'saving' });
+      try {
+        const data = JSON.parse(draftJson) as DraftData;
+        const id = await ensureDraft(data);
+        const summary = await api.drafts.update(id, data);
+        setSaveState({ kind: 'saved', at: summary.updatedAt });
+      } catch {
+        setSaveState({ kind: 'error' });
+      }
+    }, 1000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftJson, loaded, !!file]);
+
+  // The PDF goes to the draft once (it is the draft's document from then on).
+  useEffect(() => {
+    if (!loaded || !file || draftDocUploaded || submitted.current) return;
+    (async () => {
+      try {
+        const id = await ensureDraft(JSON.parse(draftJson) as DraftData);
+        await api.drafts.uploadDocument(id, file);
+        setDraftDocUploaded(true);
+      } catch {
+        setSaveState({ kind: 'error' });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file, loaded, draftDocUploaded]);
+
+  const discardDraft = async () => {
+    if (!confirm('Discard this draft? This cannot be undone.')) return;
+    submitted.current = true;
+    if (draftIdRef.current) await api.drafts.delete(draftIdRef.current).catch(() => {});
+    router.push('/dashboard/requests');
+  };
+
   // Handle file upload and extraction
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
@@ -88,6 +222,7 @@ export default function NewRequestPage() {
     }
 
     setFile(uploadedFile);
+    setDraftDocUploaded(false);
     setError('');
     setSuccess('');
     setWarning('');
@@ -166,7 +301,9 @@ export default function NewRequestPage() {
     }
 
     try {
+      submitted.current = true;
       const created = await api.requests.create({
+        draftId: draftIdRef.current,
         requestorName,
         titleShortDescription: title,
         vendorName,
@@ -186,8 +323,9 @@ export default function NewRequestPage() {
         // Storage unavailable; the default is a convenience only.
       }
 
-      // Attach the original PDF (if one was uploaded) so it shows on the detail page.
-      if (file) {
+      // Attach the original PDF so it shows on the detail page. A draft's PDF was
+      // already moved to the request by the server.
+      if (file && !(draftIdRef.current && draftDocUploaded)) {
         try {
           await api.requests.uploadDocument(created.id, file);
         } catch {
@@ -202,6 +340,7 @@ export default function NewRequestPage() {
         router.refresh();
       }, 1500);
     } catch (err) {
+      submitted.current = false;
       setError(err instanceof Error ? err.message : 'Failed to create request');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -210,11 +349,28 @@ export default function NewRequestPage() {
   return (
     <div className={`${fileUrl ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto px-4 sm:px-6 lg:px-8 py-8`}>
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink">New Procurement Request</h1>
-        <p className="text-gray-600 mt-2">
-          Upload a vendor offer PDF or fill in the details manually
-        </p>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight text-ink">New Procurement Request</h1>
+          <p className="text-gray-600 mt-2">
+            Upload a vendor offer PDF or fill in the details manually
+          </p>
+        </div>
+        {(draftId || saveState.kind !== 'idle') && (
+          <div className="flex items-center gap-4 pt-2 text-sm">
+            <span className={saveState.kind === 'error' ? 'text-red-600' : 'text-ink/50'}>
+              {saveState.kind === 'saving' && 'Saving draft…'}
+              {saveState.kind === 'saved' &&
+                `Draft saved ${new Date(saveState.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}
+              {saveState.kind === 'error' && 'Couldn’t save draft'}
+            </span>
+            {draftId && (
+              <button type="button" onClick={discardDraft} className="font-medium text-red-600 hover:text-red-700">
+                Discard draft
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {error && <Alert variant="error" className="mb-6">{error}</Alert>}

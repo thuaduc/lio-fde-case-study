@@ -24,6 +24,7 @@ const titleCase = (s: string) =>
 
 export default function RequestsPage() {
   const [requests, setRequests] = useState<ProcurementRequestWithDetails[]>([]);
+  const [drafts, setDrafts] = useState<api.DraftSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -34,7 +35,12 @@ export default function RequestsPage() {
     const load = async () => {
       setLoading(true);
       try {
-        setRequests(await api.requests.list());
+        const [reqs, myDrafts] = await Promise.all([
+          api.requests.list(),
+          api.drafts.list().catch(() => [] as api.DraftSummary[]),
+        ]);
+        setRequests(reqs);
+        setDrafts(myDrafts);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load requests');
       }
@@ -42,6 +48,16 @@ export default function RequestsPage() {
     };
     load();
   }, []);
+
+  const deleteDraft = async (id: string) => {
+    if (!confirm('Discard this draft? This cannot be undone.')) return;
+    try {
+      await api.drafts.delete(id);
+      setDrafts((ds) => ds.filter((d) => d.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to discard draft');
+    }
+  };
 
   const filteredRequests = requests.filter((req) => {
     if (filterStatus !== 'all' && req.status !== filterStatus) return false;
@@ -68,6 +84,41 @@ export default function RequestsPage() {
       </div>
 
       {error && <Alert variant="error" className="mb-6">{error}</Alert>}
+
+      {drafts.length > 0 && (
+        <div className="lio-card p-6 mb-6">
+          <h2 className="text-lg font-semibold tracking-tight text-ink mb-1">Drafts</h2>
+          <p className="text-sm text-ink/55 mb-4">Only you can see your drafts. They save automatically.</p>
+          <div className="space-y-2">
+            {drafts.map((d) => (
+              <div key={d.id} className="flex items-center justify-between gap-3 rounded-lg bg-ink-800/[0.02] p-3">
+                <Link href={`/dashboard/new-request?draft=${d.id}`} className="min-w-0 flex-1 group">
+                  <p className="text-sm font-medium text-ink group-hover:underline truncate">
+                    {d.title || 'Untitled draft'}
+                  </p>
+                  <p className="text-sm text-ink/55 mt-0.5 truncate">
+                    {[d.vendorName, d.fileName, `Edited ${new Date(d.updatedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}`]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </Link>
+                {d.totalCost != null && d.totalCost > 0 && (
+                  <span className="text-sm font-semibold text-ink tabular-nums">
+                    ${d.totalCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => deleteDraft(d.id)}
+                  className="text-sm font-medium text-red-600 hover:text-red-700"
+                >
+                  Discard
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="lio-card p-4 mb-6">
