@@ -35,6 +35,8 @@ interface DraftData {
   extractionWarnings: string[];
   fieldSources: api.FieldSources;
   totalCost: number;
+  /** Extraction finished for the draft's PDF (a draft saved mid-extraction resumes it). */
+  extracted?: boolean;
 }
 
 type SaveState = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: string } | { kind: 'error' };
@@ -51,6 +53,7 @@ export default function NewRequestPage() {
   const [vendorName, setVendorName] = useState('');
   const [vatId, setVatId] = useState('');
   const [quoteNumber, setQuoteNumber] = useState('');
+  const [extracted, setExtracted] = useState(false);
   const [validUntil, setValidUntil] = useState('');
   const [department, setDepartment] = useState('');
   const [commodityGroupId, setCommodityGroupId] = useState<number | null>(null);
@@ -114,17 +117,23 @@ export default function NewRequestPage() {
           setQuotedGrandTotal(data.quotedGrandTotal ?? null);
           setExtractionWarnings(data.extractionWarnings ?? []);
           setFieldSources(data.fieldSources ?? {});
+          const wasExtracted = data.extracted ?? (data.orderLines?.length ?? 0) > 0;
+          setExtracted(wasExtracted);
+          let restored: File | null = null;
           if (d.hasDocument) {
             const url = await api.drafts.documentUrl(id);
             if (url) {
               const blob = await (await fetch(url)).blob();
               URL.revokeObjectURL(url);
-              setFile(new File([blob], d.fileName ?? 'document.pdf', { type: 'application/pdf' }));
+              restored = new File([blob], d.fileName ?? 'document.pdf', { type: 'application/pdf' });
+              setFile(restored);
               setDraftDocUploaded(true);
             }
           }
           rememberDraftId(id);
           setSaveState({ kind: 'saved', at: d.updatedAt });
+          // Left before extraction finished: pick it up again from the saved PDF.
+          if (restored && !wasExtracted) void runExtraction(restored);
         } catch {
           setError('This draft no longer exists. Starting a new request.');
           window.history.replaceState(null, '', '/dashboard/new-request');
@@ -173,7 +182,7 @@ export default function NewRequestPage() {
 
   const draftData: DraftData = {
     requestorName, title, vendorName, vatId, quoteNumber, validUntil, department, commodityGroupId, orderLines,
-    taxTotal, quotedGrandTotal, extractionWarnings, fieldSources, totalCost: totals.grand,
+    taxTotal, quotedGrandTotal, extractionWarnings, fieldSources, totalCost: totals.grand, extracted,
   };
 
   // Autosave ~1s after the last change, once there is something worth keeping.
@@ -236,11 +245,17 @@ export default function NewRequestPage() {
     setWarning('');
     setExtractionWarnings([]);
     setFieldSources({});
+    setExtracted(false);
+    await runExtraction(uploadedFile);
+  };
+
+  /** Extract a PDF into the form (also resumes a draft left mid-extraction). */
+  const runExtraction = async (pdfFile: File) => {
     setExtracting(true);
 
     try {
       // One call: rows + boxes from the PDF, structured lines, classification.
-      const extractionResult = await api.extraction.extractPdf(uploadedFile);
+      const extractionResult = await api.extraction.extractPdf(pdfFile);
 
       if (!extractionResult.success || !extractionResult.data) {
         throw new Error(extractionResult.error || 'Failed to extract data');
@@ -278,6 +293,7 @@ export default function NewRequestPage() {
         );
       }
 
+      setExtracted(true);
       setSuccess('✓ PDF extracted successfully! Review and submit.');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {

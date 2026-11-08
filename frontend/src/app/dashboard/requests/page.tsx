@@ -95,7 +95,7 @@ export default function RequestsPage() {
               <div key={d.id} className="flex items-center justify-between gap-3 rounded-lg bg-ink-800/[0.02] p-3">
                 <Link href={`/dashboard/new-request?draft=${d.id}`} className="min-w-0 flex-1 group">
                   <p className="text-sm font-medium text-ink group-hover:underline truncate">
-                    {d.title || 'Untitled draft'}
+                    {d.title || (d.hasDocument ? `${d.fileName ?? 'Uploaded PDF'} · not extracted yet` : 'Untitled draft')}
                   </p>
                   <p className="text-sm text-ink/55 mt-0.5 truncate">
                     {[d.vendorName, d.fileName, `Edited ${new Date(d.updatedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}`]
