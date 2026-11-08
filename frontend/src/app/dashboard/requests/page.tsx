@@ -6,6 +6,7 @@ import * as api from '@/lib/api';
 import { Alert } from '@/components/base';
 import type { ProcurementRequestWithDetails } from '@/types/database';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
+import { approvalLabel } from '@/lib/approval';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -223,7 +224,7 @@ export default function RequestsPage() {
                           APPROVAL_BADGE[request.approval_status]
                         }`}
                       >
-                        {titleCase(request.approval_status)}
+                        {approvalLabel(request)}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-ink">

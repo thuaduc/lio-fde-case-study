@@ -11,6 +11,7 @@ import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, linesForSave, normalizeLines } from '@/lib/orderLines';
+import { approvalLabel } from '@/lib/approval';
 
 /** Map stored lines (snake_case base + camelCase rich fields) to editor lines. */
 const toEditorLines = (req: ProcurementRequestWithDetails): Line[] =>
@@ -213,9 +214,15 @@ export default function RequestDetailPage() {
     setBusy(true); setError(''); setSuccess('');
     try {
       const wasApproved = request.approval_status === 'approved';
-      await api.requests.update(id, updatePayload(headerFromRequest(), lines, taxTotal));
+      const saved = await api.requests.update(id, updatePayload(headerFromRequest(), lines, taxTotal));
       await refresh();
-      setSuccess(wasApproved ? 'Lines saved. If the total changed, the request is pending approval again.' : 'Lines saved.');
+      setSuccess(
+        saved.auto_approved && !request.auto_approved
+          ? 'Lines saved. The new total is below the approval threshold, so the request was approved automatically.'
+          : wasApproved && saved.approval_status === 'pending'
+            ? 'Lines saved. The total changed, so the request is pending approval again.'
+            : 'Lines saved.',
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save lines');
     }
@@ -244,6 +251,11 @@ export default function RequestDetailPage() {
   }
 
   const canApprove = (role === 'buyer' || role === 'admin') && request.approval_status === 'pending';
+  // The threshold that applied when the request was auto-approved (newest entry).
+  const autoApprovedAt = request.auto_approved
+    ? activity.find((a) => a.action === 'auto_approved')?.detail?.threshold
+    : undefined;
+  const autoThreshold = typeof autoApprovedAt === 'number' ? autoApprovedAt : null;
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -260,8 +272,11 @@ export default function RequestDetailPage() {
               {titleCase(request.status)}
             </span>
             <span className={`inline-flex px-2.5 py-1 text-xs font-semibold rounded-full ${APPROVAL_BADGE[request.approval_status]}`}>
-              {titleCase(request.approval_status)}
+              {approvalLabel(request)}
             </span>
+            {autoThreshold !== null && (
+              <span className="text-sm text-ink/55">below the {usd(autoThreshold)} threshold</span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -348,7 +363,8 @@ export default function RequestDetailPage() {
             </div>
             {linesDirty && request.approval_status === 'approved' && (
               <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                This request is approved. If saving changes the total, it goes back to pending approval.
+                This request is approved. If saving changes the total, it goes back to pending approval
+                unless the new total is below your organization&apos;s approval threshold.
               </p>
             )}
             <OrderLinesEditor

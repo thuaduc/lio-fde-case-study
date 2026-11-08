@@ -60,6 +60,8 @@ export type ProcurementRequest = {
   approval_status: 'pending' | 'approved' | 'rejected';
   approved_by: string | null;
   approved_at: string | null;
+  // Approved by the org's approval threshold rather than by a buyer.
+  auto_approved?: boolean;
   total_cost: number | null;
   created_at: string;
   updated_at: string;

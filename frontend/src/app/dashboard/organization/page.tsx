@@ -27,6 +27,9 @@ export default function OrganizationPage() {
   const [role, setRole] = useState<api.MemberRole | null>(null);
   const [requiredFields, setRequiredFields] = useState<api.ConfigurableRequiredField[]>([]);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [approvalThreshold, setApprovalThreshold] = useState<number | null>(null);
+  const [thresholdInput, setThresholdInput] = useState('');
+  const [thresholdError, setThresholdError] = useState('');
 
   useEffect(() => {
     loadOrganization();
@@ -47,7 +50,7 @@ export default function OrganizationPage() {
       ]);
       setMembers(result.members);
       setInvites(result.invites);
-      setRequiredFields(settings.required_fields);
+      applySettings(settings);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load organization');
     }
@@ -89,6 +92,44 @@ export default function OrganizationPage() {
     }
   };
 
+  const applySettings = (settings: api.OrganizationSettings) => {
+    setRequiredFields(settings.required_fields);
+    setApprovalThreshold(settings.approval_threshold ?? null);
+    setThresholdInput(
+      settings.approval_threshold == null ? '' : String(settings.approval_threshold),
+    );
+  };
+
+  // PATCH replaces the whole settings object, so always send every key.
+  const saveSettings = async (next: api.OrganizationSettings) => {
+    setSavingSettings(true);
+    setError('');
+    setSuccess('');
+    try {
+      applySettings(await api.organizations.updateSettings(next));
+      setSuccess('Settings updated');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update settings');
+      await loadOrganization(); // revert to server state
+    }
+    setSavingSettings(false);
+  };
+
+  const handleSaveThreshold = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = thresholdInput.trim();
+    const value = raw === '' ? null : Number(raw);
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      setThresholdError('Enter an amount of 0 or more, or leave it empty.');
+      return;
+    }
+    setThresholdError('');
+    await saveSettings({ required_fields: requiredFields, approval_threshold: value });
+  };
+
+  const thresholdDirty =
+    (thresholdInput.trim() === '' ? null : Number(thresholdInput.trim())) !== approvalThreshold;
+
   const REQUIRABLE_FIELDS: { key: api.ConfigurableRequiredField; label: string }[] = [
     { key: 'vat_id', label: 'Tax ID' },
     { key: 'department', label: 'Department' },
@@ -99,18 +140,7 @@ export default function OrganizationPage() {
       ? requiredFields.filter((f) => f !== field)
       : [...requiredFields, field];
     setRequiredFields(next);
-    setSavingSettings(true);
-    setError('');
-    setSuccess('');
-    try {
-      const saved = await api.organizations.updateSettings({ required_fields: next });
-      setRequiredFields(saved.required_fields);
-      setSuccess('Settings updated');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update settings');
-      await loadOrganization(); // revert to server state
-    }
-    setSavingSettings(false);
+    await saveSettings({ required_fields: next, approval_threshold: approvalThreshold });
   };
 
   if (loading) {
@@ -267,7 +297,8 @@ export default function OrganizationPage() {
       )}
 
       {tab === 'settings' && (
-        <div className="lio-card p-6">
+        <>
+        <div className="lio-card p-6 mb-6">
           <h2 className="text-xl font-semibold tracking-tight text-ink">Request Settings</h2>
           <p className="text-sm text-ink/55 mt-1 mb-4">
             Choose which optional fields are required when creating a request.
@@ -293,6 +324,42 @@ export default function OrganizationPage() {
             })}
           </div>
         </div>
+
+        <div className="lio-card p-6">
+          <h2 className="text-xl font-semibold tracking-tight text-ink">Approvals</h2>
+          <p className="text-sm text-ink/55 mt-1 mb-4">
+            Skip buyer sign-off for small requests. The total includes tax.
+          </p>
+          <form onSubmit={handleSaveThreshold} className="space-y-4">
+            <Input
+              id="approval-threshold"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="0.01"
+              label="Approval threshold (USD)"
+              placeholder="No threshold"
+              value={thresholdInput}
+              onChange={(e) => {
+                setThresholdInput(e.target.value);
+                setThresholdError('');
+              }}
+              error={thresholdError}
+              helperText="Requests with a total below this amount are approved automatically. Leave empty to require approval for every request."
+              disabled={savingSettings}
+              className="sm:max-w-xs"
+            />
+            <Button
+              type="submit"
+              loading={savingSettings}
+              disabled={savingSettings || !thresholdDirty}
+              className="min-w-[100px]"
+            >
+              Save
+            </Button>
+          </form>
+        </div>
+        </>
       )}
     </div>
   );

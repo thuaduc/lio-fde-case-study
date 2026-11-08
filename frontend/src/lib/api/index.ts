@@ -47,6 +47,8 @@ export type ConfigurableRequiredField = 'vat_id' | 'department';
 
 export interface OrganizationSettings {
   required_fields: ConfigurableRequiredField[];
+  // Requests with a grand total below this are auto-approved; null = always ask.
+  approval_threshold: number | null;
 }
 
 export interface MembersResponse {
@@ -219,7 +221,15 @@ export interface RequestActivity {
   id: string;
   request_id: string;
   actor_id: string | null;
-  action: 'created' | 'updated' | 'status_changed' | 'approved' | 'rejected' | 'document_attached';
+  action:
+    | 'created'
+    | 'updated'
+    | 'status_changed'
+    | 'approved'
+    | 'rejected'
+    | 'auto_approved'
+    | 'approval_reset'
+    | 'document_attached';
   summary: string;
   detail: Record<string, unknown> | null;
   created_at: string;

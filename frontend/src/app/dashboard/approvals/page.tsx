@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import * as api from '@/lib/api';
 import { Button, Alert } from '@/components/base';
 import type { ProcurementRequestWithDetails } from '@/types/database';
+import { approvalLabel } from '@/lib/approval';
 
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ProcurementRequestWithDetails[]>([]);
@@ -158,7 +159,7 @@ export default function ApprovalsPage() {
                       : 'bg-red-100 text-red-700'
                   }`}
                 >
-                  {request.approval_status}
+                  {approvalLabel(request)}
                 </span>
               </div>
             ))}
