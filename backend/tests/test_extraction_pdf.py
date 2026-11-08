@@ -486,6 +486,13 @@ def test_env_temperature_none_gives_none(monkeypatch):
     assert Settings(_env_file=None).openai_temperature is None
 
 
+def test_prompt_short_line_descriptions():
+    prompt = svc._build_pdf_prompt("[r1] x", "15 | Facilities | Office Equipment")
+    assert "short name as printed" in prompt
+    assert "120 characters" in prompt
+    assert "Moss panel" in prompt
+
+
 def test_line_math_warns():
     l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
     _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
