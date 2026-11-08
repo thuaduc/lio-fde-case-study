@@ -124,9 +124,17 @@ export default function OrderLinesEditor({
         }}
         className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink/45 hover:bg-ink-800/[0.06] hover:text-ink"
       >
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4">
-          <path d="M5 2.5h6.5L15 6v11.5H5z" />
-          <path d="M11.5 2.5V6H15" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-[18px] w-[18px]"
+        >
+          <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7S2.5 12 2.5 12z" />
+          <circle cx="12" cy="12" r="3" />
         </svg>
       </button>
     ) : null;
