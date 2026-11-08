@@ -254,11 +254,25 @@ def test_sdk_length_error_readable(monkeypatch, db, rows_layout):
     assert not r.success and "too long" in r.error
 
 
-def test_sdk_exception_readable(monkeypatch, db, rows_layout):
+READABLE_FAILURE = "Extraction failed \u2014 please try again or fill in the form manually"
+
+
+def test_sdk_exception_readable(monkeypatch, db, rows_layout, caplog):
     exc = openai.APIConnectionError(request=SimpleNamespace())
     use(monkeypatch, FakeClient(exc=exc))
-    r = svc.extract_from_pdf(b"%PDF-", db)
-    assert not r.success and r.error and "OpenAI" in r.error
+    with caplog.at_level("ERROR", logger=svc.logger.name):
+        r = svc.extract_from_pdf(b"%PDF-", db)
+    assert not r.success and r.error == READABLE_FAILURE
+    assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
+
+
+def test_generic_exception_readable(monkeypatch, db, rows_layout, caplog):
+    exc = RuntimeError("Error code: 400 - secret internals")
+    use(monkeypatch, FakeClient(exc=exc))
+    with caplog.at_level("ERROR", logger=svc.logger.name):
+        r = svc.extract_from_pdf(b"%PDF-", db)
+    assert r.error == READABLE_FAILURE and "400" not in r.error
+    assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
 
 
 def test_missing_api_key(monkeypatch, db, rows_layout):

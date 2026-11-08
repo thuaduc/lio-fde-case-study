@@ -195,6 +195,9 @@ def extract_vendor_data(pdf_text: str, db: Session) -> ExtractionResponse:
 # Rich extraction from PDF layout rows (POST /extraction/pdf)
 # ---------------------------------------------------------------------------
 
+EXTRACTION_FAILED = (
+    "Extraction failed \u2014 please try again or fill in the form manually"
+)
 SCAN_ERROR = "No text found in this PDF — it may be a scan"
 
 PDF_SYSTEM_PROMPT = (
@@ -562,12 +565,12 @@ def extract_from_pdf(pdf_bytes: bytes, db: Session) -> ExtractionResponse:
         return _fail(too_long)
     except openai.ContentFilterFinishReasonError:
         return _fail("The AI provider's content filter blocked this document")
-    except openai.OpenAIError as exc:
+    except openai.OpenAIError:
         logger.exception("OpenAI request failed")
-        return _fail(f"OpenAI request failed: {exc}")
-    except Exception as exc:  # noqa: BLE001
+        return _fail(EXTRACTION_FAILED)
+    except Exception:  # noqa: BLE001
         logger.exception("Error extracting quote")
-        return _fail(f"Extraction failed: {exc}")
+        return _fail(EXTRACTION_FAILED)
 
     choice = completion.choices[0]
     if choice.finish_reason == "length":
