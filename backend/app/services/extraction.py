@@ -433,25 +433,40 @@ def reconcile(
     tax_total: float | None,
     grand_total: float | None,
 ) -> list[str]:
-    """Warnings where the quote's stated totals disagree with its lines."""
+    """Warnings where the quote's stated totals disagree with its lines.
+
+    The deciding check is active lines + tax against the grand total. When it
+    holds, the quote is consistent even if its stated "net" or "subtotal" is
+    items only (Apple adds a $4 recycling fee after the subtotal).
+    """
     warnings: list[str] = []
     keys = active_keys(lines)
-    tol = _totals_tol(sum(1 for ln in lines if ln.key in keys))
-    if net_total is not None:
-        computed = _round(sum(ln.total_price for ln in lines if ln.key in keys))
-        if abs(computed - net_total) > tol:
-            warnings.append(
-                f"Line items add up to {_money(computed)} but the quote's net "
-                f"total is {_money(net_total)}"
-            )
-    if net_total is not None and tax_total is not None and grand_total is not None:
-        expected = _round(net_total + tax_total)
-        if abs(expected - grand_total) > tol:
-            warnings.append(
-                f"Net total {_money(net_total)} plus tax {_money(tax_total)} is "
-                f"{_money(expected)} but the quote's grand total is "
-                f"{_money(grand_total)}"
-            )
+    active = [ln for ln in lines if ln.key in keys]
+    tol = _totals_tol(len(active))
+    lines_sum = _round(sum(ln.total_price for ln in active))
+    # Items only: what a quote's "subtotal" often covers.
+    items_sum = _round(
+        sum(ln.total_price for ln in active if ln.kind not in ("shipping", "fee", "surcharge"))
+    )
+
+    # Without a stated tax the grand total can't be checked.
+    if grand_total is not None and tax_total is not None:
+        expected = _round(lines_sum + tax_total)
+        if abs(expected - grand_total) <= tol:
+            return warnings
+        tax_words = f" plus tax {_money(tax_total)}" if tax_total else ""
+        warnings.append(
+            f"Line items {_money(lines_sum)}{tax_words} come to {_money(expected)} "
+            f"but the quote's grand total is {_money(grand_total)}"
+        )
+
+    if net_total is not None and all(
+        abs(s - net_total) > tol for s in (lines_sum, items_sum)
+    ):
+        warnings.append(
+            f"Line items add up to {_money(lines_sum)} but the quote's net "
+            f"total is {_money(net_total)}"
+        )
     return warnings
 
 

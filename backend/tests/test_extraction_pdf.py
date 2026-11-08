@@ -443,12 +443,17 @@ def test_prompt_department_is_buyers_only():
     assert "Apple Business Team" in prompt
 
 
-def test_apple_fee_missing_from_net_warns():
+def test_apple_fee_after_items_subtotal_is_consistent():
+    # Apple: subtotal $1,409.06 covers the item only; the $4 fee comes after tax.
+    # Lines (1,413.06) + tax (121.53) = grand (1,534.59), so no warning.
     lines = [el("1", 1409.06), el("2", 4.00, kind="fee")]
-    w = svc.reconcile(lines, 1409.06, 121.53, 1534.59)
-    assert "Line items add up to $1,413.06 but the quote's net total is $1,409.06" in w
-    # net + tax (1,530.59) also disagrees with the 1,534.59 grand total
-    assert len(w) == 2 and "grand total is $1,534.59" in w[1]
+    assert svc.reconcile(lines, 1409.06, 121.53, 1534.59) == []
+
+
+def test_missing_fee_still_warns_on_grand_total():
+    # Same quote with the $4 fee line dropped: lines + tax miss the grand total.
+    w = svc.reconcile([el("1", 1409.06)], 1409.06, 121.53, 1534.59)
+    assert w == ["Line items $1,409.06 plus tax $121.53 come to $1,530.59 but the quote's grand total is $1,534.59"]
 
 
 def test_totals_tolerance_scales_with_active_lines():
@@ -538,7 +543,7 @@ def test_line_math_warns():
 
 def test_net_plus_tax_vs_grand_warns():
     w = svc.reconcile([el("1", 100)], 100.0, 8.0, 110.0)
-    assert w == ["Net total $100.00 plus tax $8.00 is $108.00 but the quote's grand total is $110.00"]
+    assert w == ["Line items $100.00 plus tax $8.00 come to $108.00 but the quote's grand total is $110.00"]
     assert svc.reconcile([el("1", 100)], 100.0, 8.0, 108.0) == []
 
 
