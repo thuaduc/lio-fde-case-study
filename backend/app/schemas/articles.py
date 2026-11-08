@@ -30,17 +30,21 @@ class ArticlePage(BaseModel):
     offset: int
 
 
+MAX_SUGGESTION_LINES = 100
+MAX_DESCRIPTION_LENGTH = 500
+
+
 class SuggestionLineIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    description: str
+    description: str = Field(max_length=MAX_DESCRIPTION_LENGTH)
     unit: str | None = None
     unit_price: float | None = Field(default=None, alias="unitPrice")
     vendor_item_number: str | None = Field(default=None, alias="vendorItemNumber")
 
 
 class SuggestionsRequest(BaseModel):
-    lines: list[SuggestionLineIn]
+    lines: list[SuggestionLineIn] = Field(max_length=MAX_SUGGESTION_LINES)
 
 
 class ArticleSuggestionOut(BaseModel):

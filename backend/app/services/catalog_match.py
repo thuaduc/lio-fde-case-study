@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from rapidfuzz import fuzz
 from rapidfuzz.utils import default_process
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
@@ -69,6 +70,21 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
 
 
+def _upsert_embeddings(db: Session, rows: list[dict]) -> None:
+    """INSERT .. ON CONFLICT (text_hash) DO UPDATE: replaces stale-model rows
+    and tolerates a concurrent request inserting the same hash."""
+    if not rows:
+        return
+    dialect = db.get_bind().dialect.name
+    insert = (postgresql if dialect == "postgresql" else sqlite).insert
+    stmt = insert(ArticleEmbedding).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["text_hash"],
+        set_={"model": stmt.excluded.model, "embedding": stmt.excluded.embedding},
+    )
+    db.execute(stmt)
+
+
 def ensure_embeddings(db: Session, texts: list[str]) -> dict[str, list[float]]:
     """Vectors for ``texts`` (keyed by the text as given), embedding only the
     ones missing from the cache in one batched request.
@@ -89,6 +105,7 @@ def ensure_embeddings(db: Session, texts: list[str]) -> dict[str, list[float]]:
 
     missing = [h for h in by_hash if h not in cached]
     if missing:
+        rows_out: list[dict] = []
         client = extraction._get_client()
         for i in range(0, len(missing), EMBEDDING_BATCH):
             chunk = missing[i : i + EMBEDDING_BATCH]
@@ -98,7 +115,8 @@ def ensure_embeddings(db: Session, texts: list[str]) -> dict[str, list[float]]:
             for h, item in zip(chunk, response.data, strict=True):
                 vector = [float(x) for x in item.embedding]
                 cached[h] = vector
-                db.merge(ArticleEmbedding(text_hash=h, model=model, embedding=vector))
+                rows_out.append({"text_hash": h, "model": model, "embedding": vector})
+        _upsert_embeddings(db, rows_out)
         db.commit()
 
     return {t: cached[text_hash(t)] for t in texts}

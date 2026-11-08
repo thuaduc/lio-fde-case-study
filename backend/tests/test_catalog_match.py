@@ -245,6 +245,8 @@ def test_fallback_without_api_key(client, org, monkeypatch):
     assert s["savingPerUnit"] == 13.0
     # Fuzzy only: the moss line scores ~54 against HAR-00172, below the cutoff.
     assert out[1]["suggestions"] == []
+    out = suggest(client, headers, [{"description": GRINDER_LINE, "unit": "piece", "unitPrice": 900.0}])
+    assert out[0]["suggestions"] == []
     assert fake.embedding_calls == [] and fake.chat_calls == []
 
 
@@ -294,6 +296,7 @@ def test_embedding_model_mismatch_counts_as_missing(client, monkeypatch):
         row.model = "old-model"
         db.commit()
         cm.ensure_embeddings(db, [MOSS])
+        db.expire_all()
         assert len(fake.embedding_calls) == 2
         assert db.get(ArticleEmbedding, cm.text_hash(MOSS)).model == settings.openai_embedding_model
 
@@ -430,3 +433,38 @@ def test_empty_lines_and_blank_description(client, org, monkeypatch):
     out = suggest(client, headers, [{"description": "  ", "unit": "x", "unitPrice": 1}])
     assert out == [{"lineIndex": 0, "suggestions": []}]
     assert fake.chat_calls == []
+
+
+def test_request_caps_return_422(client, org):
+    headers, _ = org
+    ok = {"description": "x" * 500}
+    r = client.post("/articles/suggestions", json={"lines": [ok]}, headers=headers)
+    assert r.status_code == 200
+    r = client.post(
+        "/articles/suggestions", json={"lines": [{"description": "x" * 501}]}, headers=headers
+    )
+    assert r.status_code == 422
+    r = client.post(
+        "/articles/suggestions", json={"lines": [{"description": "a"}] * 101}, headers=headers
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("old_model", ["text-embedding-3-small", "old-model"])
+def test_upsert_tolerates_existing_row(client, monkeypatch, old_model):
+    """A row inserted by a concurrent request (or a stale model) is overwritten."""
+    use(monkeypatch, FakeClient())
+    h = cm.text_hash(MOSS)
+    with Session() as db:
+        db.add(ArticleEmbedding(text_hash=h, model=old_model, embedding=[9.0]))
+        db.commit()
+        cm._upsert_embeddings(
+            db,
+            [{"text_hash": h, "model": settings.openai_embedding_model, "embedding": [1.0, 2.0]}],
+        )
+        db.commit()
+        row = db.get(ArticleEmbedding, h)
+        db.refresh(row)
+        assert row.model == settings.openai_embedding_model
+        assert row.embedding == [1.0, 2.0]
+        assert db.scalar(select(func.count()).select_from(ArticleEmbedding)) == 1
