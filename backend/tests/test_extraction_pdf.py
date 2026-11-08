@@ -416,6 +416,12 @@ def test_list_price_fallback_when_unit_price_null():
     assert (ln.amount, ln.unit_price, ln.total_price) == (3, 10.0, 30.0)
 
 
+def test_prompt_department_is_buyers_only():
+    prompt = svc._build_pdf_prompt("[r1] x", "15 | Facilities | Office Equipment")
+    assert "BUYER's department only" in prompt
+    assert "Apple Business Team" in prompt
+
+
 def test_line_math_warns():
     l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
     _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
