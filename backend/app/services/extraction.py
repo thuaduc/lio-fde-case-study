@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from app.services.line_links import active_keys, inherited_groups, primary_group
 from app.services.pdf_layout import (
     Box,
     PdfLayout,
+    Word,
     extract_layout,
     layout_to_prompt_text,
     row_segments,
@@ -242,6 +244,8 @@ Rules:
 - Use plain numbers only (no currency symbols). US number formatting: "1,438.00" = 1438.00. Write units out in plain English (e.g. "ea." -> "pieces").
 - net_total is the subtotal before tax, tax_total the tax, grand_total the amount payable including tax.
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
+- vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 27-1073640'); look there before giving up.
+- vendor_name: prefer the letterhead / sender line over a later mention in the terms.
 - field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 94 1985704' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
 - Classify every line: its commodity_group_id is the SINGLE most appropriate group below for that line, or null if genuinely uncertain. Discounts, surcharges, shipping and fees tied to a position take that position's group.
@@ -411,14 +415,148 @@ _HEADER_FIELDS = (
 )
 
 
+_CORP_WORDS = {"inc", "llc", "corp", "co", "ltd", "gmbh", "the", "and", "of"}
+_WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+             "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"}
+# Labels that may directly precede a value and are boxed with it (normalised).
+_LABELS = {"ein", "taxid", "taxidno", "taxnumber", "vatid", "vat", "validuntil", "validthru",
+           "validto", "expires", "quote", "quoteno", "quotenumber", "quotation", "no",
+           "number", "department", "dept"}
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _digits(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def _date_forms(value: str) -> list[str]:
+    """Printed forms of an ISO date (normalised), most specific first."""
+    try:
+        d = datetime.date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return []
+    mon, month = d.strftime("%b"), d.strftime("%B")
+    forms = [
+        f"{d.month}/{d.day}/{d.year}", f"{d.month}/{d.day}/{d.year % 100:02d}",
+        f"{d.month:02d}/{d.day:02d}/{d.year}", f"{d.month:02d}/{d.day:02d}/{d.year % 100:02d}",
+        f"{mon} {d.day}, {d.year}", f"{month} {d.day}, {d.year}",
+        f"{d.day} {mon} {d.year}", f"{d.day} {month} {d.year}",
+        f"{d.day:02d}.{d.month:02d}.{d.year}", d.isoformat(),
+    ]
+    return list(dict.fromkeys(_norm(f) for f in forms))
+
+
+def _tokens(value: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", value.lower()) if t not in _CORP_WORDS}
+
+
+def _union(page: int, row, words: list[Word]) -> Box:
+    return Box(page=page, x0=min(w.x0 for w in words), y0=row.box.y0,
+               x1=max(w.x1 for w in words), y1=row.box.y1)
+
+
+def _find_window(row, targets: list[str], norm, allow_contains: bool) -> Box | None:
+    """Smallest contiguous word window whose normalised text equals (or, if allowed,
+    contains) a target; widened by a directly preceding label (and weekday)."""
+    words = row.words
+    keys = [norm(w.text) for w in words]
+    texts = [_norm(w.text) for w in words]  # for labels/weekdays, whatever the field
+    best: tuple[int, int, int] | None = None  # (rank, length, start) with end
+    best_span = None
+    for i, k in enumerate(keys):
+        if not k:
+            continue
+        acc = ""
+        for j in range(i, len(words)):
+            acc += keys[j]
+            if not keys[j]:
+                continue
+            exact = acc in targets
+            if exact or (allow_contains and any(t in acc for t in targets)):
+                cand = (0 if exact else 1, len(acc), i)
+                if best is None or cand < best:
+                    best, best_span = cand, (i, j)
+                break
+    if best_span is None:
+        return None
+    i, j = best_span
+    for k in (3, 2, 1):  # longest preceding label wins
+        if i - k >= 0 and "".join(texts[i - k:i]) in _LABELS:
+            i -= k
+            break
+    if i > 0 and texts[i - 1] in _WEEKDAYS:
+        i -= 1
+    return _union(row.page, row, words[i:j + 1])
+
+
+def _segment_box(row, tokens: set[str]) -> Box | None:
+    """Box of the first gap-separated segment of the row that shares a token."""
+    if not row.words:
+        return row.box if tokens & _tokens(row.text) else None
+    seg: list[Word] = []
+    segments: list[list[Word]] = []
+    prev: Word | None = None
+    for w in row.words:
+        if prev is None or (w.x0 - prev.x1) > 2.0 * row.char_width:
+            seg = []
+            segments.append(seg)
+        seg.append(w)
+        prev = w
+    for seg in segments:
+        if tokens & _tokens(" ".join(w.text for w in seg)):
+            return _union(row.page, row, seg)
+    return None
+
+
+def _field_box(attr: str, value: str, cited: list, layout: PdfLayout) -> Box | None:
+    """One tight box for a header value: first word-window match in reading order,
+    cited rows first, then every row; else the matching gap segment of the first
+    cited row; else nothing."""
+    is_id = attr == "vendor_tax_id"
+    if is_id:
+        targets, norm = [_digits(value)], _digits
+    elif attr == "valid_until":
+        targets, norm = _date_forms(value) or [_norm(value)], _norm
+    else:
+        targets, norm = [_norm(value)], _norm
+    targets = [t for t in targets if t]
+    if not targets:
+        return None
+
+    def search(rows: list, allow_contains: bool) -> Box | None:
+        for row in rows:
+            if row.words:
+                box = _find_window(row, targets, norm, allow_contains)
+            else:  # no word positions: the row is all we can point at
+                box = row.box if any(t in norm(row.text) for t in targets) else None
+            if box is not None:
+                return box
+        return None
+
+    order = {r.id: n for n, r in enumerate(layout.rows)}
+    cited = sorted(cited, key=lambda r: order.get(r.id, 0))
+    box = search(cited, allow_contains=True)
+    if box is None:  # the model may have cited the wrong row
+        box = search(layout.rows, allow_contains=False)
+    if box is None and cited and not is_id and attr != "valid_until":
+        box = _segment_box(cited[0], _tokens(value))
+    return box
+
+
 def resolve_field_sources(q: LlmQuote, layout: PdfLayout) -> dict[str, list[Box]]:
+    """At most one tight, word-level box per header field."""
     out: dict[str, list[Box]] = {}
     for attr, key, value_attr in _HEADER_FIELDS:
-        if not getattr(q, value_attr):
+        value = getattr(q, value_attr)
+        if not value:
             continue
-        boxes = boxes_for_rows(getattr(q.field_source_rows, attr), layout)
-        if boxes:
-            out[key] = boxes
+        cited = _cited_rows(getattr(q.field_source_rows, attr), layout)
+        box = _field_box(attr, str(value), cited, layout)
+        if box is not None:
+            out[key] = [box]
     return out
 
 

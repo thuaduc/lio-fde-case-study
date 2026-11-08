@@ -587,7 +587,7 @@ def test_field_sources_resolved_and_keys_camel():
 
 def test_field_sources_unknown_rows_dropped_and_empty_omitted():
     lt = lay(mkrow("v", "Acme Corp"))
-    q = quote([], field_source_rows=fsr(vendor_name=["nope"], department=["v"]))
+    q = quote([], vendor_name="Zed Ltd", department="Acme", field_source_rows=fsr(vendor_name=["nope"], department=["v"]))
     data, _ = svc.to_extracted(q, lt, GROUPS)
     assert "vendorName" not in data.field_sources
     assert "vatId" not in data.field_sources
@@ -613,8 +613,135 @@ def test_hollis_vat_box_is_ein_row(quote_bytes):
     row = next(r for r in layout.rows if "EIN: 94 1985704" in r.text)
     q = quote([], vendor_tax_id="94 1985704", field_source_rows=fsr(vendor_tax_id=[row.id]))
     data, _ = svc.to_extracted(q, layout, GROUPS)
-    assert data.field_sources["vatId"] == [row.box]
+    assert covered(layout, data.field_sources["vatId"])[-2:] == ["94", "1985704"]
 
 
 def test_prompt_cites_header_rows():
     assert "field_source_rows" in svc._build_pdf_prompt("", "")
+
+
+# --- word-level header highlights on the real quotes (fake LLM, no network) ---
+
+APPLE = "Quote_1__Lio_Technologies_Inc__1x_MBA___2214703918.pdf"
+VERDEFORM = "QT-OF2312380-Cust-57692.pdf"
+HARTWELL = "Quote_Hartwell_Cleveland_ACME_Grinding_Machine.pdf"
+GREENMANTLE = "QT-4120-Cust-14918.pdf"
+
+
+def real(quote_bytes, name):
+    from app.services.pdf_layout import extract_layout
+    return extract_layout(quote_bytes(name))
+
+
+def cite(layout, needle):
+    """What a thorough model cites: every row containing the value."""
+    return [r.id for r in layout.rows if needle in r.text]
+
+
+def covered(layout, boxes):
+    """Words of the layout that the boxes cover (centre inside the box), in order."""
+    out = []
+    for b in boxes:
+        for r in layout.rows:
+            if r.page != b.page or not (r.box.y0 < b.y1 and r.box.y1 > b.y0):
+                continue
+            out += [w.text for w in r.words if b.x0 <= (w.x0 + w.x1) / 2 <= b.x1]
+    return out
+
+
+def sources(layout, **kw):
+    return svc.resolve_field_sources(quote([], **kw), layout)
+
+
+def overlap(a, b):
+    return a.page == b.page and a.x0 < b.x1 and b.x0 < a.x1 and a.y0 < b.y1 and b.y0 < a.y1
+
+
+def test_apple_vendor_box_covers_only_apple(quote_bytes):
+    lt = real(quote_bytes, APPLE)
+    fs = sources(lt, vendor_name="Apple", field_source_rows=fsr(vendor_name=cite(lt, "Apple Business Team")))
+    assert len(fs["vendorName"]) == 1
+    assert covered(lt, fs["vendorName"]) == ["Apple"]
+
+
+def test_apple_quote_number_and_valid_until_do_not_overlap(quote_bytes):
+    lt = real(quote_bytes, APPLE)
+    row = cite(lt, "Wednesday, Mar 20, 2024")
+    fs = sources(lt, quote_number="2214703918", valid_until="2024-03-20",
+                 field_source_rows=fsr(quote_number=row, valid_until=row))
+    qn, vu = fs["quoteNumber"][0], fs["validUntil"][0]
+    assert not overlap(qn, vu)
+    assert covered(lt, [qn]) == ["2214703918"]
+    assert covered(lt, [vu])[-3:] == ["Mar", "20,", "2024"]
+    assert "Tuesday," not in covered(lt, [vu])
+
+
+def test_greenmantle_vendor_has_exactly_one_box_on_page_1(quote_bytes):
+    lt = real(quote_bytes, GREENMANTLE)
+    ids = cite(lt, "Greenmantle Moss Studio, LLC")
+    assert len(ids) >= 3  # letterhead + footers
+    fs = sources(lt, vendor_name="Greenmantle Moss Studio, LLC",
+                 field_source_rows=fsr(vendor_name=ids))
+    assert len(fs["vendorName"]) == 1 and fs["vendorName"][0].page == 1
+    assert covered(lt, fs["vendorName"]) == ["Greenmantle", "Moss", "Studio,", "LLC"]
+
+
+def test_greenmantle_tax_id_boxed_once_not_on_every_page(quote_bytes):
+    lt = real(quote_bytes, GREENMANTLE)
+    fs = sources(lt, vendor_tax_id="85-3252405",
+                 field_source_rows=fsr(vendor_tax_id=cite(lt, "EIN: 85-3252405")))
+    assert len(fs["vatId"]) == 1
+    assert "85-3252405" in covered(lt, fs["vatId"])
+    assert "Fax:" not in covered(lt, fs["vatId"])
+
+
+def test_hartwell_vendor_single_box(quote_bytes):
+    lt = real(quote_bytes, HARTWELL)
+    fs = sources(lt, vendor_name="Hartwell Industrial Tools, Inc.",
+                 field_source_rows=fsr(vendor_name=cite(lt, "Hartwell Industrial Tools, Inc.")))
+    assert len(fs["vendorName"]) == 1 and fs["vendorName"][0].page == 1
+
+
+def test_hollis_vat_box_covers_the_digits_and_label(quote_bytes):
+    from tests.test_pdf_layout import HOLLIS
+    lt = real(quote_bytes, HOLLIS)
+    fs = sources(lt, vendor_tax_id="94-1985704",
+                 field_source_rows=fsr(vendor_tax_id=cite(lt, "EIN: 94 1985704")))
+    assert len(fs["vatId"]) == 1
+    assert covered(lt, fs["vatId"]) == ["EIN:", "94", "1985704"]
+
+
+def test_wrong_cited_row_falls_back_to_whole_layout(quote_bytes):
+    from tests.test_pdf_layout import HOLLIS
+    lt = real(quote_bytes, HOLLIS)
+    wrong = [lt.rows[0].id]
+    fs = sources(lt, vendor_tax_id="94 1985704", field_source_rows=fsr(vendor_tax_id=wrong))
+    assert covered(lt, fs["vatId"])[-2:] == ["94", "1985704"]
+
+
+def test_unmatched_value_keeps_only_a_gap_segment_or_nothing(quote_bytes):
+    from tests.test_pdf_layout import HOLLIS
+    lt = real(quote_bytes, HOLLIS)
+    # derived value ('four weeks' after 12/12/2023): no printed form on the quote
+    row = next(r for r in lt.rows if "prices in this quote are valid" in r.text)
+    fs = sources(lt, valid_until="2024-01-09", field_source_rows=fsr(valid_until=[row.id]))
+    assert "validUntil" not in fs
+    # token fallback: a multi-column row is cut to the segment holding the value
+    lt = real(quote_bytes, APPLE)
+    row = cite(lt, "Apple Business Team")
+    fs = sources(lt, vendor_name="Apple Inc.", field_source_rows=fsr(vendor_name=row))
+    assert covered(lt, fs["vendorName"]) == ["Apple", "Business", "Team"]
+
+
+def test_verdeform_footer_is_an_image_not_text(quote_bytes):
+    # The 'EIN: 27-1073640' footer is part of a full-page raster background, so the
+    # layout has no such row; the box is dropped rather than guessed.
+    lt = real(quote_bytes, VERDEFORM)
+    assert not any("27-1073640" in r.text for r in lt.rows)
+    fs = sources(lt, vendor_tax_id="27-1073640", field_source_rows=fsr(vendor_tax_id=["p1-r001"]))
+    assert "vatId" not in fs
+
+
+def test_prompt_mentions_footer_tax_ids():
+    p = svc._build_pdf_prompt("", "")
+    assert "footer" in p and "letterhead" in p
