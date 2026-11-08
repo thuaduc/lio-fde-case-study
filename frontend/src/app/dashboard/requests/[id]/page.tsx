@@ -10,6 +10,8 @@ import type { ProcurementRequestWithDetails } from '@/types/database';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
+import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
+import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
 import { approvalLabel } from '@/lib/approval';
@@ -69,6 +71,8 @@ export default function RequestDetailPage() {
   const [taxTotal, setTaxTotal] = useState(0);
   const [linesDirty, setLinesDirty] = useState(false);
   const docPanel = useRef<DocumentPanelHandle>(null);
+  const catalog = useCatalogSuggestions(lines, request?.status === 'open');
+  const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
 
   /** Click handler that highlights one header field, when its location is known. */
   const showField = (key: keyof api.FieldSources) => {
@@ -376,6 +380,19 @@ export default function RequestDetailPage() {
               </p>
             )}
             <OrderLinesEditor
+              renderLineExtra={(line) => (
+                <CatalogSuggestion
+                  line={line}
+                  editable={request.status === 'open'}
+                  suggestions={catalog[line.key]}
+                  applied={line.articleId ? appliedArticles[line.articleId] : undefined}
+                  onApply={(s) => {
+                    setAppliedArticles((a) => ({ ...a, [s.articleId]: s }));
+                    setLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s) : l)));
+                    setLinesDirty(true);
+                  }}
+                />
+              )}
               groups={commodityGroups}
               lines={lines}
               taxTotal={taxTotal}

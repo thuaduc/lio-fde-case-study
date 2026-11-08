@@ -397,7 +397,31 @@ export const suppliers = {
 // Articles
 // ============================================================================
 
+export interface ArticleSuggestion {
+  articleId: string;
+  articleNumber: string;
+  supplierName: string | null;
+  description: string;
+  unitPrice: number;
+  unit: string;
+  quantity: number;
+  matchType: 'same' | 'similar';
+  /** Quoted unit price minus the negotiated one (null when the quote has none). */
+  savingPerUnit: number | null;
+}
+
+export interface LineSuggestions {
+  lineIndex: number;
+  suggestions: ArticleSuggestion[];
+}
+
 export const articles = {
+  /** Negotiated catalog articles matching each line (max 3 per line, cheapest first). */
+  suggestions(
+    lines: { description: string; unit?: string | null; unitPrice?: number | null; vendorItemNumber?: string | null }[],
+  ): Promise<LineSuggestions[]> {
+    return apiFetch('/articles/suggestions', { body: { lines } });
+  },
   list(params?: {
     search?: string;
     supplierId?: string;

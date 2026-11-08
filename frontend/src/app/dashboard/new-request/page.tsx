@@ -8,6 +8,8 @@ import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import SourceButton from '@/components/SourceButton';
 import WarningList, { normalizeWarnings } from '@/components/WarningList';
+import CatalogSuggestion, { applyArticle } from '@/components/CatalogSuggestion';
+import { useCatalogSuggestions } from '@/lib/useCatalogSuggestions';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, computeTotals, linesForSave, normalizeLines, primaryGroupId } from '@/lib/orderLines';
 
@@ -72,6 +74,17 @@ export default function NewRequestPage() {
     );
   };
   const totals = computeTotals(orderLines, taxTotal);
+  // Negotiated catalog prices for the lines (task 2).
+  const catalog = useCatalogSuggestions(orderLines, true);
+  const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
+  const otherSuppliers = [
+    ...new Set(
+      orderLines
+        .filter((l) => !l.removed && l.articleId && appliedArticles[l.articleId]?.supplierName)
+        .map((l) => appliedArticles[l.articleId!].supplierName!)
+        .filter((name) => name.trim().toLowerCase() !== vendorName.trim().toLowerCase()),
+    ),
+  ];
   // Groups are booked per line; the request shows the one with the largest spend.
   const primaryGroup = primaryGroupId(orderLines) ?? commodityGroupId;
   const primaryGroupLabel = (() => {
@@ -560,7 +573,24 @@ export default function NewRequestPage() {
             warnings={extractionWarnings}
             onShowSource={fileUrl ? (sources) => docPanel.current?.showSource({ sources }) : undefined}
           />
+          {otherSuppliers.length > 0 && (
+            <p className="mb-4 rounded-lg bg-ink-800/[0.04] px-3 py-2 text-sm text-ink/70">
+              This request now includes catalog lines from {otherSuppliers.join(', ')}, not only {vendorName || 'the quote vendor'}.
+            </p>
+          )}
           <OrderLinesEditor
+            renderLineExtra={(line) => (
+              <CatalogSuggestion
+                line={line}
+                editable
+                suggestions={catalog[line.key]}
+                applied={line.articleId ? appliedArticles[line.articleId] : undefined}
+                onApply={(s) => {
+                  setAppliedArticles((a) => ({ ...a, [s.articleId]: s }));
+                  setOrderLines((ls) => ls.map((l) => (l.key === line.key ? applyArticle(l, s) : l)));
+                }}
+              />
+            )}
             groups={commodityGroups}
             lines={orderLines}
             taxTotal={taxTotal}
