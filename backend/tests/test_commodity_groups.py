@@ -298,13 +298,13 @@ def test_adjustment_inherits_parent_group(client, acme):
     r = client.post("/requests", json=req([
         line("1", 100, commodityGroupId=a),
         line("2", 10, kind="discount", parentKey="1"),
-        line("3", 5, kind="shipping"),
+        line("3", 5, kind="shipping", commodityGroupId=b),  # whole quote: own group
         line("4", 95, commodityGroupId=b),
     ]), headers=acme)
     assert r.status_code == 201, r.text
     got = [ln["commodityGroupId"] for ln in r.json()["order_lines"]]
-    assert got == [a, a, None, b]
-    # A: 100 - 10 = 90 < B: 95
+    assert got == [a, a, b, b]
+    # A: 100 - 10 = 90 < B: 5 + 95 = 100
     assert r.json()["commodity_group_id"] == b
     client.delete(f"/requests/{r.json()['id']}", headers=acme)
 
@@ -330,6 +330,67 @@ def test_adjustment_inherits_parent_group(client, acme):
     assert data.commodity_group_id == 11
     dumped = data.model_dump(by_alias=True)
     assert dumped["orderLines"][0]["commodityGroupId"] == 11
+
+
+def test_every_active_line_needs_a_group(client, acme):
+    a = group_id(client, acme, "Information Technology", "IT Hardware")
+    lines = [
+        line("1", 300, commodityGroupId=a),
+        line("2", 100, positionDescription="Cable ties"),
+    ]
+    r = client.post("/requests", json=req(lines), headers=acme)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == (
+        "Every order line needs a commodity group (missing on: Cable ties)"
+    )
+    # alternatives and optional lines aren't booked, so they may stay without one
+    lines[1].update(kind="alternative", parentKey="1")
+    r = client.post("/requests", json=req(lines), headers=acme)
+    assert r.status_code == 201, r.text
+    assert [ln["commodityGroupId"] for ln in r.json()["order_lines"]] == [a, None]
+    client.delete(f"/requests/{r.json()['id']}", headers=acme)
+
+
+def test_request_group_fills_lines_without_one(client, acme):
+    """An API client that sends one group for the request books its lines there."""
+    a = group_id(client, acme, "Information Technology", "IT Hardware")
+    g = group_id(client, acme, "Information Technology", "Software")
+    r = client.post("/requests", json=req([
+        line("1", 100, commodityGroupId=a),
+        line("2", 10, kind="discount", parentKey="1"),  # inherits a, not g
+        line("3", 50),
+        line("4", 20, kind="optional"),  # not booked: left alone
+    ], commodityGroupId=g), headers=acme)
+    assert r.status_code == 201, r.text
+    got = [ln["commodityGroupId"] for ln in r.json()["order_lines"]]
+    assert got == [a, a, g, None]
+    client.delete(f"/requests/{r.json()['id']}", headers=acme)
+
+
+def test_older_client_update_keeps_or_rebooks_line_groups(client, acme):
+    """A client that sends no line groups keeps them, unless it changes the request's."""
+    a = group_id(client, acme, "Information Technology", "IT Hardware")
+    b = group_id(client, acme, "Information Technology", "Software")
+    c = group_id(client, acme, "Facility Management", "Electrical Engineering")
+    created = client.post("/requests", json=req([
+        line("1", 300, commodityGroupId=a),
+        line("2", 100, commodityGroupId=b),
+    ]), headers=acme).json()
+    assert created["commodity_group_id"] == a
+
+    # unchanged request group (e.g. only the title edited): line groups stay mixed
+    legacy = as_update(req([line("1", 300), line("2", 100)], commodityGroupId=a))
+    r = client.put(f"/requests/{created['id']}", json=legacy, headers=acme)
+    assert r.status_code == 200, r.text
+    assert [ln["commodityGroupId"] for ln in r.json()["order_lines"]] == [a, b]
+
+    # a changed request group re-books the lines that don't send their own
+    legacy["commodityGroupId"] = c
+    r = client.put(f"/requests/{created['id']}", json=legacy, headers=acme)
+    assert r.status_code == 200, r.text
+    assert [ln["commodityGroupId"] for ln in r.json()["order_lines"]] == [c, c]
+    assert r.json()["commodity_group_id"] == c
+    client.delete(f"/requests/{created['id']}", headers=acme)
 
 
 # --- prompt -------------------------------------------------------------------

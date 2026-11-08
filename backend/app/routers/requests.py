@@ -115,21 +115,28 @@ def _assign_groups(
     """Validate and complete the line groups; return them with the primary group.
 
     - On update, a line that doesn't send ``commodityGroupId`` (an older
-      client) keeps the stored group of the line with the same key.
+      client) keeps the stored group of the line with the same key, unless
+      the client changed the request-level group: then it takes that one.
     - Line groups and the request group must be the org's and active; a value
       already stored on the same line / request may stay unchanged regardless.
     - Adjustments with a parent and no group take the parent's group.
-    - The primary group is the largest active spend; without any line group
-      the client's ``commodityGroupId`` is used, and one of the two is required.
+    - Any other active line without a group takes the client's request-level
+      ``commodityGroupId`` (older API clients send only that one).
+    - Every active line must end up with a group: spend is booked per line.
+    - The primary group is the largest active spend.
     """
     stored = (
         {row.line_key: row.commodity_group_id for row in request.order_lines}
         if request is not None
         else {}
     )
+    current = request.commodity_group_id if request is not None else None
+    changed = requested_group is not None and requested_group != current
     lines = [
         ln if "commodity_group_id" in ln.model_fields_set or ln.key not in stored
-        else ln.model_copy(update={"commodity_group_id": stored[ln.key]})
+        else ln.model_copy(update={
+            "commodity_group_id": requested_group if changed else stored[ln.key]
+        })
         for ln in lines
     ]
     for ln in lines:
@@ -143,12 +150,26 @@ def _assign_groups(
         for ln, gid in zip(lines, inherited_groups(lines, override=False))
     ]
 
-    current = request.commodity_group_id if request is not None else None
     if requested_group is not None:
         _validate_commodity_group(db, organization_id, requested_group, current)
+    active = active_keys(lines)
+    lines = [
+        ln.model_copy(update={"commodity_group_id": requested_group})
+        if ln.key in active and ln.commodity_group_id is None
+        else ln
+        for ln in lines
+    ]
+    missing = [
+        ln.position_description.strip() or ln.position or ln.key
+        for ln in lines
+        if ln.key in active and ln.commodity_group_id is None
+    ]
+    if missing:
+        raise _unprocessable(
+            "Every order line needs a commodity group "
+            f"(missing on: {', '.join(missing)})"
+        )
     group_id = primary_group(lines)
-    if group_id is None:
-        group_id = requested_group
     if group_id is None:
         raise _unprocessable("A commodity group is required")
     return lines, group_id
