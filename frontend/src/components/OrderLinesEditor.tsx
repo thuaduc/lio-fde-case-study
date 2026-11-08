@@ -67,8 +67,8 @@ export interface OrderLinesEditorProps {
   quotedGrandTotal?: number | null;
   /** Highlight the quote's printed grand total. Omit when it is not located. */
   onShowTotal?: () => void;
-  /** Extra content under a line in read mode (e.g. catalog suggestions). */
-  renderLineExtra?: (line: Line) => React.ReactNode;
+  /** Extra line content; editing distinguishes the expanded position panel. */
+  renderLineExtra?: (line: Line, editing: boolean) => React.ReactNode;
   lockedReason?: string;
   /** The org's active commodity groups, for the per-line picker. */
   groups?: CommodityGroup[];
@@ -219,7 +219,7 @@ export default function OrderLinesEditor({
             {docButton(line)}
           </div>
         </div>
-        {renderLineExtra?.(line)}
+        {renderLineExtra?.(line, false)}
       </div>
     );
   };
@@ -366,6 +366,8 @@ export default function OrderLinesEditor({
             </label>
           )}
         </div>
+
+        {renderLineExtra?.(line, true)}
 
         <p className="mt-3 text-right text-sm text-ink/55">
           Line total <span className="ml-2 font-semibold text-ink tabular-nums">{usd(line.totalPrice)}</span>

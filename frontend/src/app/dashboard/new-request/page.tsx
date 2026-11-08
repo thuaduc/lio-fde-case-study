@@ -610,10 +610,10 @@ export default function NewRequestPage() {
             <p className="mb-3 text-sm text-ink/45">Looking for matching catalog articles…</p>
           )}
           <OrderLinesEditor
-            renderLineExtra={(line) => (
+            renderLineExtra={(line, isEditing) => (
               <CatalogSuggestion
                 line={line}
-                editable
+                editable={isEditing}
                 onRestore={() => {
                   setOrderLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
                 }}

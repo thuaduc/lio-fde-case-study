@@ -386,11 +386,11 @@ export default function RequestDetailPage() {
               <p className="mb-3 text-sm text-ink/45">Looking for matching catalog articles…</p>
             )}
             <OrderLinesEditor
-              renderLineExtra={(line) => (
+              renderLineExtra={(line, isEditing) => (
                 <CatalogSuggestion
                   line={line}
                   currency={request.currency || 'USD'}
-                  editable={linesEditable}
+                  editable={linesEditable && isEditing}
                   onRestore={() => {
                     setLines((ls) => ls.map((l) => l.key === line.key ? restoreArticle(l) : l));
                     setLinesDirty(true);
