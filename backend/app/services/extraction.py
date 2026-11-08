@@ -809,7 +809,8 @@ def to_extracted(
     keys_active = active_keys(out)
     computed = _round(sum(ln.total_price for ln in out if ln.key in keys_active))
     tax = q.tax_total
-    net = q.net_total if q.net_total is not None else computed
+    # Server-computed: the stated net may be items only (Apple's subtotal).
+    net = computed
     total_cost = (
         q.grand_total if q.grand_total is not None else _round(computed + (tax or 0))
     )

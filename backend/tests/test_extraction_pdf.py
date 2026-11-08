@@ -150,6 +150,23 @@ def test_total_cost_is_grand_total():
     assert d2.total_cost == 108.0 and d2.net_total == 100
 
 
+def test_net_total_is_sum_of_active_lines_not_stated_subtotal():
+    # Apple: the printed subtotal (1,409.06) is items only; the $4 fee is active.
+    # netTotal is server-computed (1,413.06); totalCost stays the quote's grand.
+    # reconcile() sees lines + tax == grand, so it raises no warnings.
+    q = quote(
+        [line(position="1", total_price=1409.06),
+         line(position="2", kind="fee", total_price=4.00)],
+        net_total=1409.06, tax_total=121.53, grand_total=1534.59,
+    )
+    data, warnings = conv(q)
+    assert data.net_total == 1413.06
+    assert data.total_cost == 1534.59
+    assert data.tax_total == 121.53
+    # Only the unverified-price warnings remain (the canned layout has no rows).
+    assert all(w.message.startswith("Couldn't find line") for w in warnings)
+
+
 def test_inactive_parent_excludes_adjustment():
     q = quote([
         line(position="1", total_price=100),
