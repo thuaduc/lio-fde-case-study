@@ -10,15 +10,6 @@ import SourceButton from '@/components/SourceButton';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
 
-const LAST_DEPARTMENT_KEY = 'lio.lastDepartment';
-const readLastDepartment = () => {
-  try {
-    return window.localStorage.getItem(LAST_DEPARTMENT_KEY) ?? '';
-  } catch {
-    return '';
-  }
-};
-
 /** Everything a draft keeps (the PDF is stored separately as the draft's document). */
 interface DraftData {
   requestorName: string;
@@ -138,15 +129,6 @@ export default function NewRequestPage() {
           setError('This draft no longer exists. Starting a new request.');
           window.history.replaceState(null, '', '/dashboard/new-request');
         }
-      } else {
-        // Requestor defaults to the signed-in user; department to the one they used last.
-        try {
-          const { user, profile } = await api.auth.me();
-          setRequestorName((cur) => cur || profile?.full_name || user.email);
-        } catch {
-          // no default
-        }
-        setDepartment((cur) => cur || readLastDepartment());
       }
       setLoaded(true);
     })();
@@ -189,7 +171,11 @@ export default function NewRequestPage() {
   const draftJson = JSON.stringify(draftData);
   useEffect(() => {
     if (!loaded || submitted.current) return;
-    const worthKeeping = !!file || orderLines.length > 0 || !!title || !!vendorName;
+    // Saved as soon as any field has a value.
+    const worthKeeping =
+      !!file ||
+      orderLines.length > 0 ||
+      !!(requestorName || department || title || vendorName || vatId || quoteNumber || validUntil || commodityGroupId || taxTotal);
     if (!worthKeeping) return;
     const t = setTimeout(async () => {
       setSaveState({ kind: 'saving' });
@@ -283,10 +269,7 @@ export default function NewRequestPage() {
       }
 
       // Show warnings for missing fields
-      // Department not on the quote is fine when it is already filled from the default.
-      const missing = (extractionResult.missingFields ?? []).filter(
-        (f) => !(f === 'Department' && (extracted.department || department)),
-      );
+      const missing = extractionResult.missingFields ?? [];
       if (missing.length > 0) {
         setWarning(
           `⚠️ Could not extract: ${missing.join(', ')}. Please fill in these fields manually.`
@@ -344,12 +327,6 @@ export default function NewRequestPage() {
         department,
         orderLines: linesToSave,
       });
-
-      try {
-        if (department) window.localStorage.setItem(LAST_DEPARTMENT_KEY, department);
-      } catch {
-        // Storage unavailable; the default is a convenience only.
-      }
 
       // Attach the original PDF so it shows on the detail page. A draft's PDF was
       // already moved to the request by the server.

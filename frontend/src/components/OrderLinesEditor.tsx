@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { LineKind } from '@/lib/api';
 import { Input } from '@/components/base';
 import SourceButton from '@/components/SourceButton';
@@ -100,8 +100,8 @@ export default function OrderLinesEditor({
         kind: 'item',
         parentKey: null,
         positionDescription: '',
-        amount: 1,
-        unit: 'pieces',
+        amount: 0,
+        unit: '',
         unitPrice: 0,
         totalPrice: 0,
         sources: [],
@@ -250,37 +250,35 @@ export default function OrderLinesEditor({
         />
 
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Input
+          <DecimalField
             label="Quantity"
-            inputMode="decimal"
+            placeholder="0"
             value={line.amount}
-            onChange={(e) => patch(line.key, { amount: toNum(e.target.value) ?? 0 })}
+            onValue={(n) => patch(line.key, { amount: n ?? 0 })}
           />
           <Input
             label="Unit"
             value={line.unit}
             onChange={(e) => patch(line.key, { unit: e.target.value }, false)}
           />
-          <Input
+          <DecimalField
             label="Unit price ($)"
-            inputMode="decimal"
+            placeholder="0.00"
             value={line.unitPrice}
-            onChange={(e) =>
+            onValue={(n) =>
               patch(line.key, {
-                unitPrice: toNum(e.target.value) ?? 0,
+                unitPrice: n ?? 0,
                 listUnitPrice: null,
                 adjustmentPercent: null,
               })
             }
           />
-          <Input
+          <DecimalField
             label="Adjustment (%)"
             title="Negative = discount, positive = surcharge (e.g. -20)"
-            inputMode="decimal"
             placeholder="e.g. -20"
-            value={line.adjustmentPercent ?? ''}
-            onChange={(e) => {
-              const adj = toNum(e.target.value);
+            value={line.adjustmentPercent}
+            onValue={(adj) => {
               patch(line.key, {
                 adjustmentPercent: adj,
                 // Apply the percentage to the list price; start from the current price.
@@ -382,11 +380,12 @@ export default function OrderLinesEditor({
         <dt className="self-center text-right text-ink/55">Tax</dt>
         <dd className="text-right tabular-nums">
           {editable ? (
-            <input
+            <DecimalField
+              plain
               aria-label="Tax"
-              inputMode="decimal"
+              placeholder="0.00"
               value={taxTotal}
-              onChange={(e) => onChange(lines, toNum(e.target.value) ?? 0)}
+              onValue={(n) => onChange(lines, n ?? 0)}
               className="h-8 w-28 rounded-lg border border-line bg-white px-2 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-accent-deep/60"
             />
           ) : (
@@ -404,3 +403,38 @@ export default function OrderLinesEditor({
     </div>
   );
 }
+
+/**
+ * Text box for a number. Keeps exactly what is typed ("0.", "-", "1,5") so
+ * partial input isn't rewritten, and starts empty instead of showing 0.
+ */
+function DecimalField({
+  value,
+  onValue,
+  plain,
+  ...rest
+}: Omit<React.ComponentProps<typeof Input>, 'value' | 'onChange'> & {
+  value: number | null | undefined;
+  onValue: (n: number | null) => void;
+  plain?: boolean;
+}) {
+  const shown = (v: number | null | undefined) => (v == null || v === 0 ? '' : String(v));
+  const [text, setText] = useState(shown(value));
+  // Follow outside changes (recalculation, swaps) without fighting the typist.
+  useEffect(() => {
+    const typed = toNum(text);
+    if (typed !== (value ?? null) && !(text.trim() === '' && (value ?? 0) === 0)) setText(shown(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  const props = {
+    ...rest,
+    inputMode: 'decimal' as const,
+    value: text,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+      setText(e.target.value);
+      onValue(toNum(e.target.value));
+    },
+  };
+  return plain ? <input {...props} /> : <Input {...props} />;
+}
+
