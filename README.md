@@ -119,3 +119,16 @@ backend/    FastAPI app — routers, services, models, schemas, core; Alembic mi
 frontend/   Next.js app — app-router pages, typed API client (src/lib/api), components
 docker-compose.yml
 ```
+
+
+## Final audit regression checks
+
+Run `npm test` from `frontend/` (Node 22.12+). The DOM-based checks exercise
+catalog keyboard handling, persistent article labels, draft write ordering,
+PDF replacement, duplicate submission, stale detail responses and preservation
+of unsaved edits. Pure checks cover discount signs, decimal input and linked
+charges when positions are removed or made optional.
+
+Run `backend/.venv/bin/pytest backend/tests -q` from the app directory for API
+regressions, including closed-request tax locking and numeric/required-field
+validation. The audit adds no database migration.

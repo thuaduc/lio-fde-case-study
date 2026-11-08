@@ -1,11 +1,12 @@
 import uuid
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     computed_field,
     field_validator,
     model_validator,
@@ -16,6 +17,7 @@ from app.services.pdf_layout import Box
 
 RequestStatus = Literal["open", "in_progress", "closed"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 # ---------------------------------------------------------------------------
@@ -23,6 +25,8 @@ ApprovalStatus = Literal["pending", "approved", "rejected"]
 # ---------------------------------------------------------------------------
 
 class OriginalQuote(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     positionDescription: str
     unitPrice: float
     amount: float
@@ -39,11 +43,11 @@ class OrderLineIn(BaseModel):
     working. ``unitPrice``/``totalPrice`` are recomputed by the server on save.
     """
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
 
     position_description: str = Field(alias="positionDescription")
-    unit_price: float = Field(alias="unitPrice")
-    amount: float
+    unit_price: float = Field(alias="unitPrice", gt=-1e10, lt=1e10)
+    amount: float = Field(gt=-1e8, lt=1e8)
     unit: str
     total_price: float = Field(alias="totalPrice")
     key: str | None = None
@@ -51,8 +55,8 @@ class OrderLineIn(BaseModel):
     kind: LineKind = "item"
     position: str | None = None
     vendor_item_number: str | None = Field(default=None, alias="vendorItemNumber")
-    list_unit_price: float | None = Field(default=None, alias="listUnitPrice")
-    adjustment_percent: float | None = Field(default=None, alias="adjustmentPercent")
+    list_unit_price: float | None = Field(default=None, alias="listUnitPrice", gt=-1e10, lt=1e10)
+    adjustment_percent: float | None = Field(default=None, alias="adjustmentPercent", gt=-1e4, lt=1e4)
     sources: list[Box] = Field(default_factory=list)
     source_text: str | None = Field(default=None, alias="sourceText")
     original_quote: OriginalQuote | None = Field(default=None, alias="originalQuote")
@@ -63,11 +67,11 @@ class OrderLineIn(BaseModel):
 
 
 class RequestCreate(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
 
-    requestor_name: str = Field(alias="requestorName")
-    title: str = Field(alias="titleShortDescription")
-    vendor_name: str = Field(alias="vendorName")
+    requestor_name: NonBlank = Field(alias="requestorName")
+    title: NonBlank = Field(alias="titleShortDescription")
+    vendor_name: NonBlank = Field(alias="vendorName")
     vat_id: str | None = Field(default=None, alias="vatId")
     # Used only when no line has a group; otherwise the server sets the
     # primary group (largest active spend) from the lines.
@@ -79,7 +83,7 @@ class RequestCreate(BaseModel):
     quote_number: str | None = Field(default=None, alias="quoteNumber")
     valid_until: date | None = Field(default=None, alias="validUntil")
     currency: str | None = None
-    tax_total: float | None = Field(default=None, alias="taxTotal")
+    tax_total: float | None = Field(default=None, alias="taxTotal", gt=-1e10, lt=1e10)
     extraction_warnings: WarningList | None = Field(
         default=None, alias="extractionWarnings"
     )
@@ -91,11 +95,11 @@ class RequestCreate(BaseModel):
 
 
 class RequestUpdate(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
 
-    requestor_name: str = Field(alias="requestorName")
-    title: str
-    vendor_name: str = Field(alias="vendorName")
+    requestor_name: NonBlank = Field(alias="requestorName")
+    title: NonBlank
+    vendor_name: NonBlank = Field(alias="vendorName")
     vat_id: str | None = Field(default=None, alias="vatId")
     # Same rule as RequestCreate: only used when no line has a group.
     commodity_group_id: int | None = Field(default=None, alias="commodityGroupId")
@@ -104,7 +108,7 @@ class RequestUpdate(BaseModel):
     quote_number: str | None = Field(default=None, alias="quoteNumber")
     valid_until: date | None = Field(default=None, alias="validUntil")
     currency: str | None = None
-    tax_total: float | None = Field(default=None, alias="taxTotal")
+    tax_total: float | None = Field(default=None, alias="taxTotal", gt=-1e10, lt=1e10)
     extraction_warnings: WarningList | None = Field(
         default=None, alias="extractionWarnings"
     )

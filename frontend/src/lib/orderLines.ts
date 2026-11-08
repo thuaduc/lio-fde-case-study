@@ -59,6 +59,27 @@ export function isActive(line: Line, lines: Line[], seen = new Set<string>()): b
   return !!parent && isActive(parent, lines, seen);
 }
 
+/** Parse decimal input, including comma decimals and explicitly grouped USD. */
+export function parseDecimal(value: string): number | null {
+  const dollars = value.includes('$');
+  let normalized = value.replace(/[$\s]/g, '');
+  if (!normalized || normalized === '-') return null;
+  if (normalized.includes(',') && normalized.includes('.')) {
+    // The last separator is decimal: 1,234.50 or 1.234,50.
+    normalized = normalized.lastIndexOf(',') > normalized.lastIndexOf('.')
+      ? normalized.replace(/\./g, '').replace(',', '.') : normalized.replace(/,/g, '');
+  } else if (normalized.includes(',')) {
+    // A single unadorned comma is decimal, so typing the third fractional
+    // digit never suddenly multiplies a quantity by a thousand.
+    normalized = (dollars || (normalized.match(/,/g)?.length ?? 0) > 1)
+      && /^-?\d{1,3}(,\d{3})+$/.test(normalized)
+      ? normalized.replace(/,/g, '') : normalized.replace(',', '.');
+  }
+  if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
 /** Recompute unit price (from list price + adjustment) and total. */
 export function recalcLine(line: Line): Line {
   let unitPrice = line.unitPrice;
@@ -68,6 +89,8 @@ export function recalcLine(line: Line): Line {
         ? round2(line.listUnitPrice * (1 + line.adjustmentPercent / 100))
         : line.listUnitPrice;
   }
+  // Match the server: a discount always subtracts, even when entered as positive.
+  if (line.kind === 'discount' && line.amount * unitPrice > 0) unitPrice = -unitPrice;
   return { ...line, unitPrice, totalPrice: round2(line.amount * unitPrice) };
 }
 
@@ -95,12 +118,19 @@ export function swapAlternative(lines: Line[], key: string): Line[] {
   });
 }
 
-/** Change a line's kind, keeping links valid. */
+/** Keep only links allowed by the server when a line changes kind. */
 export function setKind(lines: Line[], key: string, kind: LineKind): Line[] {
+  const allows = (child: LineKind, parent: LineKind) => {
+    if (child === 'item') return false;
+    if (child === 'alternative' || child === 'optional') return parent === 'item';
+    return parent === 'item' || parent === 'alternative' || parent === 'optional';
+  };
   return lines.map((l) => {
-    if (l.key === key) return { ...l, kind, parentKey: kind === 'item' ? null : l.parentKey };
-    // Lines that hung off a line that is no longer an item lose their link.
-    if (l.parentKey === key && kind !== 'item') return { ...l, parentKey: null };
+    if (l.key === key) {
+      const parent = byKey(lines, l.parentKey);
+      return recalcLine({ ...l, kind, parentKey: parent && allows(kind, parent.kind) ? parent.key : null });
+    }
+    if (l.parentKey === key && !allows(l.kind, kind)) return { ...l, parentKey: null };
     return l;
   });
 }
@@ -110,16 +140,23 @@ export function setRemoved(lines: Line[], key: string, removed: boolean): Line[]
   return lines.map((l) => (l.key === key ? { ...l, removed } : l));
 }
 
-/** Lines to send to the API: soft-removed lines are dropped, links to them cleared. */
+/** Drop removed positions and their dependent lines, as the preview totals do.
+ * A linked charge must never become a whole-quote charge just because its item
+ * was removed. Keep soft removals in the editor so restoring a parent works.
+ */
 export function linesForSave(lines: Line[]): Line[] {
   const removed = new Set(lines.filter((l) => l.removed).map((l) => l.key));
-  return lines
-    .filter((l) => !l.removed)
-    .map(({ removed: _removed, ...l }) =>
-      l.parentKey && removed.has(l.parentKey)
-        ? { ...l, parentKey: null, kind: l.kind === 'alternative' ? 'optional' : l.kind }
-        : l,
-    );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const l of lines) {
+      if (l.parentKey && removed.has(l.parentKey) && !removed.has(l.key)) {
+        removed.add(l.key);
+        changed = true;
+      }
+    }
+  }
+  return lines.filter((l) => !removed.has(l.key)).map(({ removed: _removed, ...l }) => l);
 }
 
 /** A line's effective group: its own, or (for a linked charge) its parent's. */

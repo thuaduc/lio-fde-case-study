@@ -1,4 +1,5 @@
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 
@@ -182,7 +183,7 @@ def _enforce_required_fields(
     """Enforce the org's configurable required fields (see OrganizationSettings)."""
     org = db.get(Organization, organization_id)
     required = (org.settings or {}).get("required_fields", []) if org else []
-    missing = [field for field in required if not getattr(payload, field, None)]
+    missing = [field for field in required if not (getattr(payload, field, None) or "").strip()]
     if missing:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -403,9 +404,13 @@ def _prepare_lines(lines: list[OrderLineIn]) -> list[OrderLineIn]:
         list_price = _num(line.list_unit_price, 2)  # Numeric(12, 2)
         adjustment = _num(line.adjustment_percent, 3)  # Numeric(7, 3)
         unit_price = round(line.unit_price, 2)
+        if abs(amount) >= 1e8 or (list_price is not None and abs(list_price) >= 1e10) or (adjustment is not None and abs(adjustment) >= 1e4):
+            raise _unprocessable("Line quantity or price exceeds the supported range")
         if list_price is not None and adjustment is not None:
             unit_price = round(list_price * (1 + adjustment / 100), 2)
         total_price = round(amount * unit_price, 2)
+        if any(not math.isfinite(value) or abs(value) >= 1e10 for value in (unit_price, total_price)):
+            raise _unprocessable("Calculated line price exceeds the supported range")
         if line.kind == "discount" and total_price > 0:
             total_price = -total_price
             unit_price = -unit_price
@@ -429,9 +434,14 @@ def compute_totals(
     lines: list[OrderLineIn], tax_total: float | None
 ) -> tuple[float, float]:
     """Return (net, grand): net sums the active lines; grand adds the tax."""
+    if tax_total is not None and abs(round(tax_total, 2)) >= 1e10:
+        raise _unprocessable("Tax exceeds the supported range")
     keys = active_keys(lines)
     net = round(sum(ln.total_price for ln in lines if ln.key in keys), 2)
-    return net, round(net + (tax_total or 0), 2)
+    grand = round(net + (tax_total or 0), 2)
+    if any(not math.isfinite(value) or abs(value) >= 1e10 for value in (net, grand)):
+        raise _unprocessable("Request total exceeds the supported range")
+    return net, grand
 
 
 def _validate_articles(
@@ -625,7 +635,9 @@ def update_request(
     # Order lines stay editable until the request is closed. Approval moves a
     # request in progress, so an approved request's lines remain editable.
     lines_changed = _stored_signature(request) != _order_lines_signature(lines)
-    if request.status == "closed" and lines_changed:
+    if request.status == "closed" and (
+        lines_changed or _num(request.tax_total, 2) != _num(tax_total, 2)
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Order lines can't be edited once the request is closed.",

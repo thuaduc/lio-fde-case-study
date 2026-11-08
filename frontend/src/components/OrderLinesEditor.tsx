@@ -8,6 +8,7 @@ import SourceButton from '@/components/SourceButton';
 import {
   LINE_KINDS,
   type Line,
+  parseDecimal,
   computeTotals,
   groupLines,
   isActive,
@@ -46,12 +47,7 @@ export const usd = (n: number | null | undefined) =>
     : (n < 0 ? '−$' : '$') +
       Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const toNum = (v: string): number | null => {
-  const s = v.replace(/[$,\s]/g, '');
-  if (s === '' || s === '-') return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-};
+const toNum = parseDecimal;
 
 const selectCls =
   'flex h-11 w-full rounded-xl border border-line bg-white px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent-deep/60 focus:border-accent-deep/40';

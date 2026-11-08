@@ -453,3 +453,45 @@ def test_catalog_replacement_survives_reload_and_restores_quote(client, auth):
     assert stored['originalQuote'] is None
     assert stored['position_description'] == 'Quoted panel'
     assert stored['total_price'] == 716.56
+
+
+def test_closed_request_tax_cannot_change_its_total(client, auth):
+    r = create(client, auth, [line('L1')], taxTotal=5)
+    assert r.status_code == 201
+    rid = r.json()['id']
+    assert client.patch(f'/requests/{rid}/status', json={'status': 'closed'}, headers=auth).status_code == 200
+    r = put(client, auth, rid, [line('L1')], taxTotal=25)
+    assert r.status_code == 409, r.text
+    stored = client.get(f'/requests/{rid}', headers=auth).json()
+    assert stored['total_cost'] == 105
+    assert stored['taxTotal'] == 5
+    # A header-only update with unchanged tax remains possible.
+    assert put(client, auth, rid, [line('L1')], taxTotal=5, titleShortDescription='Renamed').status_code == 200
+
+
+@pytest.mark.parametrize('field', ['unitPrice', 'amount', 'totalPrice', 'listUnitPrice', 'adjustmentPercent'])
+def test_non_finite_line_values_return_validation_error(client, auth, field):
+    r = create(client, auth, [line('L1', **{field: 'NaN'})])
+    assert r.status_code == 422, r.text
+
+
+def test_non_finite_tax_returns_validation_error(client, auth):
+    r = create(client, auth, [line('L1')], taxTotal='Infinity')
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize('field', ['requestorName', 'titleShortDescription', 'vendorName'])
+def test_required_request_headers_cannot_be_whitespace(client, auth, field):
+    r = create(client, auth, [line('L1')], **{field: '   '})
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize('values', [dict(unitPrice=1e100), dict(amount=1e100), dict(amount=99999999.99999), dict(listUnitPrice=9999999999.999), dict(adjustmentPercent=9999.9999), dict(unitPrice=1e9, amount=100), dict(unitPrice=1e9, listUnitPrice=1e9, adjustmentPercent=9999)])
+def test_out_of_range_prices_return_validation_error(client, auth, values):
+    r = create(client, auth, [line('L1', **values)])
+    assert r.status_code == 422, r.text
+
+
+def test_aggregate_total_must_fit_database_precision(client, auth):
+    r = create(client, auth, [line('L1', unitPrice=9e9), line('L2', unitPrice=9e9)])
+    assert r.status_code == 422, r.text

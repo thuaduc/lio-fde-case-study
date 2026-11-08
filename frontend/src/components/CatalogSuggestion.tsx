@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
 import * as api from '@/lib/api';
 import { type Line, recalcLine } from '@/lib/orderLines';
 
@@ -38,6 +39,13 @@ export default function CatalogSuggestion({ line, suggestions, applied, editable
   onApply: (s: api.ArticleSuggestion, amount: number) => void;
   onRestore: () => void;
 }) {
+  const { data: linkedArticle } = useQuery({
+    queryKey: ['article', line.articleId],
+    queryFn: () => api.articles.get(line.articleId!),
+    enabled: !!line.articleId,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<api.Article | null>(null);
   const [search, setSearch] = useState('');
@@ -110,8 +118,8 @@ export default function CatalogSuggestion({ line, suggestions, applied, editable
     }}>
       {line.articleId && <p className="text-accent-deep">
         Catalog: <Link className="font-medium underline underline-offset-2" href={href(line.articleId)} target="_blank" rel="noopener noreferrer">
-          {applied?.articleNumber || line.vendorItemNumber || 'View catalog article'} ↗
-        </Link>{applied?.supplierName && <span className="text-ink/55"> · {applied.supplierName}</span>}
+          {linkedArticle?.article_number || applied?.articleNumber || 'View catalog article'} ↗
+        </Link>{(linkedArticle?.supplier_name || applied?.supplierName) && <span className="text-ink/55"> · {linkedArticle?.supplier_name || applied?.supplierName}</span>}
       </p>}
       {canReplace && <div className="flex flex-wrap items-center gap-3">
         <button type="button" className="rounded-lg border border-line px-3 py-1.5 font-medium hover:bg-canvas" onClick={browse}>Replace from catalog</button>
@@ -124,7 +132,14 @@ export default function CatalogSuggestion({ line, suggestions, applied, editable
         <button type="button" onClick={() => reviewSuggestion(s.articleId)} className="ml-3 font-medium text-accent-deep hover:underline">Review replacement</button>
       </div>)}
       {!open && error && <p role="alert" className="text-red-700">{error}</p>}
-      <dialog ref={dialog} onCancel={() => setOpen(false)} onClose={() => setOpen(false)} aria-labelledby={`catalog-title-${line.key}`}
+      <dialog ref={dialog} onKeyDown={(e) => {
+        // This dialog lives inside the request form. Enter in its inputs must
+        // never implicitly submit that outer form and create a request.
+        if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+          e.preventDefault();
+          if (selected) replace();
+        }
+      }} onCancel={() => setOpen(false)} onClose={() => setOpen(false)} aria-labelledby={`catalog-title-${line.key}`}
         className="fixed inset-0 m-auto max-h-[85vh] w-[min(720px,95vw)] overflow-y-auto rounded-2xl border border-line bg-white p-6 text-ink shadow-xl backdrop:bg-ink/40">
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 id={`catalog-title-${line.key}`} className="text-lg font-semibold">{selected ? 'Review replacement' : 'Choose a catalog article'} · {line.position || line.key}</h2>

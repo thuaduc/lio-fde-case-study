@@ -107,6 +107,11 @@ export default function NewRequestPage() {
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
   const submitted = useRef(false);
+  const pendingDraftSave = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingDocument = useRef<Promise<unknown>>(Promise.resolve());
+  const uploadedDocument = useRef<File | null>(null);
+  const currentFile = useRef<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   /** The requestor the last extracted quote filled in, so a new quote can replace it. */
   const extractedRequestor = useRef('');
 
@@ -138,18 +143,27 @@ export default function NewRequestPage() {
           setFieldSources(data.fieldSources ?? {});
           const wasExtracted = data.extracted ?? (data.orderLines?.length ?? 0) > 0;
           setExtracted(wasExtracted);
+          rememberDraftId(id);
           let restored: File | null = null;
           if (d.hasDocument) {
-            const url = await api.drafts.documentUrl(id);
-            if (url) {
-              const blob = await (await fetch(url)).blob();
-              URL.revokeObjectURL(url);
-              restored = new File([blob], d.fileName ?? 'document.pdf', { type: 'application/pdf' });
-              setFile(restored);
-              setDraftDocUploaded(true);
+            let url: string | null = null;
+            try {
+              url = await api.drafts.documentUrl(id);
+              if (url) {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Document download failed');
+                const blob = await response.blob();
+                restored = new File([blob], d.fileName ?? 'document.pdf', { type: 'application/pdf' });
+                setFile(restored);
+                uploadedDocument.current = restored;
+                setDraftDocUploaded(true);
+              }
+            } catch {
+              setError('Could not load the draft PDF. Your draft fields are preserved; reload to try again.');
+            } finally {
+              if (url) URL.revokeObjectURL(url);
             }
           }
-          rememberDraftId(id);
           setSaveState({ kind: 'saved', at: d.updatedAt });
           // Left before extraction finished: pick it up again from the saved PDF.
           if (restored && !wasExtracted) void runExtraction(restored);
@@ -188,7 +202,9 @@ export default function NewRequestPage() {
   const [warning, setWarning] = useState('');
   const [extracting, setExtracting] = useState(false);
 
+  currentFile.current = file;
   const fileUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => () => { if (fileUrl) URL.revokeObjectURL(fileUrl); }, [fileUrl]);
 
   const draftData: DraftData = {
     requestorName, title, vendorName, vatId, quoteNumber, validUntil, department, orderLines,
@@ -205,16 +221,21 @@ export default function NewRequestPage() {
       orderLines.length > 0 ||
       !!(requestorName || department || title || vendorName || vatId || quoteNumber || validUntil || taxTotal);
     if (!worthKeeping) return;
-    const t = setTimeout(async () => {
-      setSaveState({ kind: 'saving' });
-      try {
-        const data = JSON.parse(draftJson) as DraftData;
-        const id = await ensureDraft(data);
-        const summary = await api.drafts.update(id, data);
-        setSaveState({ kind: 'saved', at: summary.updatedAt });
-      } catch {
-        setSaveState({ kind: 'error' });
-      }
+    const t = setTimeout(() => {
+      if (submitted.current) return;
+      // Serialize writes: a slower older save must never overwrite newer edits.
+      pendingDraftSave.current = pendingDraftSave.current.catch(() => {}).then(async () => {
+        if (submitted.current) return;
+        setSaveState({ kind: 'saving' });
+        try {
+          const data = JSON.parse(draftJson) as DraftData;
+          const id = await ensureDraft(data);
+          const summary = await api.drafts.update(id, data);
+          if (!submitted.current) setSaveState({ kind: 'saved', at: summary.updatedAt });
+        } catch {
+          if (!submitted.current) setSaveState({ kind: 'error' });
+        }
+      });
     }, 1000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,27 +244,35 @@ export default function NewRequestPage() {
   // The PDF goes to the draft once (it is the draft's document from then on).
   useEffect(() => {
     if (!loaded || !file || draftDocUploaded || submitted.current) return;
-    (async () => {
+    const uploadingFile = file;
+    pendingDocument.current = pendingDocument.current.catch(() => {}).then(async () => {
+      if (submitted.current || currentFile.current !== uploadingFile) return;
       try {
         const id = await ensureDraft(JSON.parse(draftJson) as DraftData);
-        await api.drafts.uploadDocument(id, file);
-        setDraftDocUploaded(true);
+        await api.drafts.uploadDocument(id, uploadingFile);
+        if (currentFile.current === uploadingFile) {
+          uploadedDocument.current = uploadingFile;
+          setDraftDocUploaded(true);
+        }
       } catch {
-        setSaveState({ kind: 'error' });
+        if (!submitted.current) setSaveState({ kind: 'error' });
       }
-    })();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, loaded, draftDocUploaded]);
 
   const discardDraft = async () => {
+    if (submitted.current) return;
     if (!confirm('Discard this draft? This cannot be undone.')) return;
     submitted.current = true;
+    await Promise.allSettled([pendingDraftSave.current, pendingDocument.current, creatingDraft.current]);
     if (draftIdRef.current) await api.drafts.delete(draftIdRef.current).catch(() => {});
     router.push('/dashboard/requests');
   };
 
   // Handle file upload and extraction
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (submitted.current) return;
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
@@ -254,6 +283,12 @@ export default function NewRequestPage() {
 
     setFile(uploadedFile);
     setDraftDocUploaded(false);
+    // A failed replacement extraction must not leave the old quote's values
+    // paired with the newly uploaded document.
+    setOrderLines([]);
+    setTitle(''); setVendorName(''); setVatId(''); setDepartment('');
+    setQuoteNumber(''); setValidUntil(''); setTaxTotal(0); setQuotedGrandTotal(null);
+    setAppliedArticles({});
     setError('');
     setSuccess('');
     setWarning('');
@@ -275,6 +310,7 @@ export default function NewRequestPage() {
         throw new Error(extractionResult.error || 'Failed to extract data');
       }
 
+      if (submitted.current) return;
       const extracted = extractionResult.data;
 
       // Step 3: Auto-fill form (including commodity group from extraction)
@@ -313,6 +349,7 @@ export default function NewRequestPage() {
       setSuccess('✓ PDF extracted successfully! Review and submit.');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
+      if (submitted.current) return;
       console.error('Extraction error:', err);
       setError(err instanceof Error ? err.message : 'Failed to extract data from PDF');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -324,6 +361,7 @@ export default function NewRequestPage() {
   // Submit form
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitted.current || extracting || !loaded) return;
     setError('');
     setSuccess('');
     setWarning('');
@@ -346,6 +384,15 @@ export default function NewRequestPage() {
 
     try {
       submitted.current = true;
+      setSubmitting(true);
+      // Finish writes before the server consumes/deletes the draft. This also
+      // guarantees a replacement quote's PDF travels with its extracted lines.
+      await Promise.allSettled([pendingDraftSave.current, pendingDocument.current, creatingDraft.current]);
+      if (file && uploadedDocument.current !== file) {
+        const id = await ensureDraft(draftData);
+        await api.drafts.uploadDocument(id, file);
+        uploadedDocument.current = file;
+      }
       const created = await api.requests.create({
         draftId: draftIdRef.current,
         requestorName,
@@ -364,16 +411,6 @@ export default function NewRequestPage() {
         orderLines: linesToSave,
       });
 
-      // Attach the original PDF so it shows on the detail page. A draft's PDF was
-      // already moved to the request by the server.
-      if (file && !(draftIdRef.current && draftDocUploaded)) {
-        try {
-          await api.requests.uploadDocument(created.id, file);
-        } catch {
-          // Non-fatal — the request itself was created.
-        }
-      }
-
       setSuccess('Request created successfully! Redirecting...');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       setTimeout(() => {
@@ -382,6 +419,7 @@ export default function NewRequestPage() {
       }, 1500);
     } catch (err) {
       submitted.current = false;
+      setSubmitting(false);
       setError(err instanceof Error ? err.message : 'Failed to create request');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -406,7 +444,7 @@ export default function NewRequestPage() {
               {saveState.kind === 'error' && 'Couldn’t save draft'}
             </span>
             {draftId && (
-              <button type="button" onClick={discardDraft} className="font-medium text-red-600 hover:text-red-700">
+              <button type="button" onClick={discardDraft} disabled={submitting} className="font-medium text-red-600 hover:text-red-700">
                 Discard draft
               </button>
             )}
@@ -420,6 +458,7 @@ export default function NewRequestPage() {
 
       <div className={fileUrl ? 'grid grid-cols-1 xl:grid-cols-2 gap-6 items-start' : ''}>
       <form onSubmit={handleSubmit} className="space-y-8 min-w-0">
+        <fieldset disabled={submitting} className="space-y-8 min-w-0">
         {/* PDF Upload Section */}
         <div className="lio-card p-6">
           <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Upload Vendor Offer (Optional)</h2>
@@ -652,10 +691,11 @@ export default function NewRequestPage() {
           >
             Cancel
           </Button>
-          <Button type="submit" size="lg">
+          <Button type="submit" size="lg" loading={submitting} disabled={extracting || !loaded}>
             Create Request
           </Button>
         </div>
+        </fieldset>
       </form>
       {fileUrl && (
         <div className="xl:sticky xl:top-6">

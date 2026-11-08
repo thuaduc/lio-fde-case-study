@@ -40,6 +40,8 @@ const usd = (n: number | null) =>
 export default function RequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const currentRequestId = useRef(id);
+  currentRequestId.current = id;
   const { data: commodityGroups } = useCommodityGroups();
 
   const [request, setRequest] = useState<ProcurementRequestWithDetails | null>(null);
@@ -55,7 +57,7 @@ export default function RequestDetailPage() {
   const [taxTotal, setTaxTotal] = useState(0);
   const [linesDirty, setLinesDirty] = useState(false);
   const docPanel = useRef<DocumentPanelHandle>(null);
-  const linesEditable = !!request && request.status !== 'closed';
+  const linesEditable = !!request && request.status !== 'closed' && !busy && !editing;
   const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(lines, linesEditable);
   const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
 
@@ -80,26 +82,34 @@ export default function RequestDetailPage() {
     commodityGroupId: null as number | null, totalCost: 0,
   });
 
-  const load = async () => {
+  const load = async (isCurrent: () => boolean) => {
     try {
       const [req, org, acts] = await Promise.all([
         api.requests.get(id),
         api.organizations.getMine(),
         api.requests.getActivity(id),
       ]);
+      if (!isCurrent()) return;
       adopt(req);
       setRole(org.role);
       setActivity(acts);
       const url = await api.requests.documentUrl(id).catch(() => null);
+      if (!isCurrent()) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
       setPdfUrl(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load request');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Failed to load request');
     }
-    setLoading(false);
+    if (isCurrent()) setLoading(false);
   };
 
   useEffect(() => {
-    load();
+    let active = true;
+    setLoading(true); setEditing(false); setError('');
+    load(() => active);
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -115,6 +125,7 @@ export default function RequestDetailPage() {
       api.requests.get(id),
       api.requests.getActivity(id),
     ]);
+    if (currentRequestId.current !== id) return;
     adopt(req);
     setActivity(acts);
   };
@@ -198,7 +209,7 @@ export default function RequestDetailPage() {
   });
 
   const saveEdit = async () => {
-    if (!request) return;
+    if (!request || busy) return;
     setBusy(true); setError(''); setSuccess('');
     try {
       // Send the stored lines back unchanged (all rich fields included).
@@ -213,7 +224,7 @@ export default function RequestDetailPage() {
   };
 
   const saveLines = async () => {
-    if (!request) return;
+    if (!request || busy) return;
     setError(''); setSuccess('');
     const groupError = missingGroupError(linesForSave(lines));
     if (groupError) {
@@ -300,12 +311,12 @@ export default function RequestDetailPage() {
         <div className="flex flex-wrap gap-2">
           {canApprove && (
             <>
-              <Button size="sm" onClick={() => decide('approved')} disabled={busy}>Approve</Button>
+              <Button size="sm" onClick={() => decide('approved')} disabled={busy || linesDirty || editing}>Approve</Button>
               <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50"
-                onClick={() => decide('rejected')} disabled={busy}>Reject</Button>
+                onClick={() => decide('rejected')} disabled={busy || linesDirty || editing}>Reject</Button>
             </>
           )}
-          <Button size="sm" variant="outline" onClick={openEdit} disabled={busy}>Edit</Button>
+          <Button size="sm" variant="outline" onClick={openEdit} disabled={busy || linesDirty}>Edit</Button>
           <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50"
             onClick={remove} disabled={busy}>Delete</Button>
         </div>
@@ -321,7 +332,7 @@ export default function RequestDetailPage() {
           <button
             key={s}
             onClick={() => changeStatus(s)}
-            disabled={busy || request.status === s}
+            disabled={busy || linesDirty || editing || request.status === s}
             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors disabled:opacity-100 ${
               request.status === s
                 ? 'bg-ink text-white'
@@ -409,7 +420,7 @@ export default function RequestDetailPage() {
               taxTotal={taxTotal}
               onShowTotal={showTotal}
               editable={linesEditable}
-              lockedReason="Lines can't be changed once the request is closed."
+              lockedReason={request.status === 'closed' ? "Lines can't be changed once the request is closed." : undefined}
               onChange={(next, tax) => {
                 setLines(next);
                 setTaxTotal(tax);
