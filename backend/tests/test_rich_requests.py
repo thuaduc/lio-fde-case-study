@@ -235,11 +235,15 @@ def test_legacy_payload_defaults(client, auth):
         [line("1"), line("2", kind="discount", parentKey="1"),
          line("3", kind="fee", parentKey="2")],  # adjustment -> adjustment
         [line("1"), line("1")],  # duplicate key
+        [line("1"), line("2", kind="optional", parentKey="1"),
+         line("3", kind="alternative", parentKey="2")],  # alt -> optional
+        [line("1"), line("2", kind="alternative", parentKey="1"),
+         line("3", kind="optional", parentKey="2")],  # optional -> non-item
         [line("1"), line("2", kind="alternative", parentKey="1"),
          line("3", kind="alternative", parentKey="2")],  # alt -> alt
     ],
     ids=["dangling", "item-parent", "alt-parent-not-item",
-         "adjustment-chain", "duplicate", "alt-chain"],
+         "adjustment-chain", "duplicate", "alt-optional", "optional-non-item", "alt-chain"],
 )
 def test_invalid_links_rejected(client, auth, lines):
     r = create(client, auth, lines)
@@ -302,7 +306,6 @@ def _make(client, auth, lines=None, **kw):
 
 def _echo(body):
     """The lines of a response, as a client would send them back."""
-    keep = ("positionDescription", "unitPrice", "amount", "unit", "totalPrice")
     out = []
     for ln in body["order_lines"]:
         out.append({
@@ -313,9 +316,8 @@ def _echo(body):
             "vendorItemNumber": ln["vendorItemNumber"],
             "listUnitPrice": ln["listUnitPrice"],
             "adjustmentPercent": ln["adjustmentPercent"], "sources": ln["sources"],
-            "sourceText": ln["sourceText"],
+            "sourceText": ln["sourceText"], "articleId": ln["articleId"],
         })
-    assert keep
     return out
 
 
@@ -396,3 +398,18 @@ def test_tax_total_change_resets_approval_and_missing_tax_keeps_stored(client, a
 def test_unknown_article_rejected(client, auth):
     r = create(client, auth, [line("1", articleId=str(uuid.uuid4()))])
     assert r.status_code == 422
+
+
+def test_fractional_list_price_round_trips(client, auth):
+    lines = [line("1", listUnitPrice=0.135, adjustmentPercent=-10.0, amount=100,
+                  unitPrice=0.0, totalPrice=0.0)]
+    body = _make(client, auth, lines)
+    rid = body["id"]
+    assert body["order_lines"][0]["listUnitPrice"] == 0.14
+    client.patch(f"/requests/{rid}/status", json={"status": "in_progress"}, headers=auth)
+    r = put(client, auth, rid, _echo(body), requestorName="Other")
+    assert r.status_code == 200, r.text
+    assert r.json()["order_lines"] == body["order_lines"]
+    # the raw (unrounded) inputs also compare equal
+    r = put(client, auth, rid, lines)
+    assert r.status_code == 200, r.text

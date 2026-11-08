@@ -185,7 +185,7 @@ def _stored_signature(request: ProcurementRequest) -> list[tuple]:
 
 
 def _unprocessable(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+    return HTTPException(status_code=422, detail=detail)
 
 
 def _validate_links(lines: list[OrderLineIn]) -> None:
@@ -225,12 +225,15 @@ def _prepare_lines(lines: list[OrderLineIn]) -> list[OrderLineIn]:
     """
     prepared: list[OrderLineIn] = []
     for index, line in enumerate(lines):
-        unit_price = line.unit_price
-        if line.list_unit_price is not None and line.adjustment_percent is not None:
-            unit_price = round(
-                line.list_unit_price * (1 + line.adjustment_percent / 100), 2
-            )
-        total_price = round(line.amount * unit_price, 2)
+        # Normalise to the stored column precision up front, so what we compute
+        # with is exactly what a round trip through the DB returns.
+        amount = round(line.amount, 4)  # Numeric(12, 4)
+        list_price = _num(line.list_unit_price, 2)  # Numeric(12, 2)
+        adjustment = _num(line.adjustment_percent, 3)  # Numeric(7, 3)
+        unit_price = round(line.unit_price, 2)
+        if list_price is not None and adjustment is not None:
+            unit_price = round(list_price * (1 + adjustment / 100), 2)
+        total_price = round(amount * unit_price, 2)
         if line.kind == "discount" and total_price > 0:
             total_price = -total_price
             unit_price = -unit_price
@@ -238,6 +241,9 @@ def _prepare_lines(lines: list[OrderLineIn]) -> list[OrderLineIn]:
             line.model_copy(
                 update={
                     "key": line.key or str(index + 1),
+                    "amount": amount,
+                    "list_unit_price": list_price,
+                    "adjustment_percent": adjustment,
                     "unit_price": unit_price,
                     "total_price": total_price,
                 }
