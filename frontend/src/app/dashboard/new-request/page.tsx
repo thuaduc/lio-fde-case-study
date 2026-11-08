@@ -105,6 +105,8 @@ export default function NewRequestPage() {
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
   const submitted = useRef(false);
+  /** The requestor the last extracted quote filled in, so a new quote can replace it. */
+  const extractedRequestor = useRef('');
 
   const rememberDraftId = (id: string) => {
     draftIdRef.current = id;
@@ -274,6 +276,14 @@ export default function NewRequestPage() {
       const extracted = extractionResult.data;
 
       // Step 3: Auto-fill form (including commodity group from extraction)
+      // The quote's contact fills the requestor when it is empty or came from the
+      // previous quote; a name the user typed stays.
+      const quoteRequestor = extracted.requestorName || '';
+      const previousQuoteRequestor = extractedRequestor.current;
+      setRequestorName((current) =>
+        current === '' || current === previousQuoteRequestor ? quoteRequestor : current,
+      );
+      extractedRequestor.current = quoteRequestor;
       setTitle(extracted.title || '');
       setVendorName(extracted.vendorName || '');
       setVatId(extracted.vatId || '');
@@ -478,13 +488,16 @@ export default function NewRequestPage() {
           <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Request Details</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              label="Requestor Name *"
-              value={requestorName}
-              onChange={(e) => setRequestorName(e.target.value)}
-              required
-              placeholder="John Doe"
-            />
+            <div>
+              {fieldLabel('Requestor Name *', 'requestorName')}
+              <Input
+                aria-label="Requestor Name"
+                value={requestorName}
+                onChange={(e) => setRequestorName(e.target.value)}
+                required
+                placeholder="John Doe"
+              />
+            </div>
 
             <div>
               {fieldLabel('Department', 'department')}

@@ -329,7 +329,7 @@ export default function RequestDetailPage() {
           <div className="lio-card p-6">
             <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Details</h2>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-              <Field label="Requestor" value={request.requestor_name} />
+              <Field label="Requestor" value={request.requestor_name} onShow={showField('requestorName')} />
               <Field label="Department" value={request.department || '—'} onShow={showField('department')} />
               <Field label="Vendor" value={request.vendor_name} onShow={showField('vendorName')} />
               <Field label="Tax ID" value={request.vat_id || '—'} onShow={showField('vatId')} />

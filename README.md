@@ -44,6 +44,9 @@ reopens. Anyone can still change the status by hand.
 
 The PDF form extracts items, discounts, charges and alternatives, with eye
 buttons linking fields, warnings and lines to their source boxes in the PDF.
+Requestor Name is prefilled with the person the quote is addressed to (e.g.
+"Prepared for"), unless you already typed one. Department is filled only when
+the quote names one.
 Drafts save automatically and can be resumed from Requests. Until a request is
 closed, you can edit its lines, swap alternatives and apply negotiated catalog
 prices. Catalog price replacement requires equivalent units; the app does not

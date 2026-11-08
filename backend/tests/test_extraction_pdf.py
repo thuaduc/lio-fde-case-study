@@ -37,8 +37,8 @@ def line(**kw) -> LlmLine:
 
 
 def fsr(**kw) -> LlmFieldSources:
-    base = dict(vendor_name=[], vendor_tax_id=[], department=[], quote_number=[],
-                valid_until=[])
+    base = dict(requestor_name=[], vendor_name=[], vendor_tax_id=[], department=[],
+                quote_number=[], valid_until=[])
     base.update(kw)
     return LlmFieldSources(**base)
 
@@ -51,7 +51,8 @@ def tsr(**kw) -> LlmTotalSources:
 
 def quote(lines, **kw) -> LlmQuote:
     base = dict(
-        title="Quote", vendor_name="Acme", vendor_tax_id="12-3456789", department="IT",
+        title="Quote", requestor_name=None, vendor_name="Acme", vendor_tax_id="12-3456789",
+        department="IT",
         quote_number="Q1", valid_until="2026-12-31", currency="USD", lines=lines,
         net_total=None, tax_total=None, grand_total=None, unpriced_charges=[],
         total_source_rows=tsr(), commodity_group_id=None, field_source_rows=fsr(),
@@ -120,6 +121,25 @@ def test_null_tax_id_success():
     assert data.vat_id == ""
     resp = svc._finish(data, [])
     assert resp.success and "Tax ID" in resp.missing_fields
+
+
+def test_requestor_name_extracted():
+    data, _ = conv(quote([line(position="1")], requestor_name="Vladimir Keil"))
+    assert data.requestor_name == "Vladimir Keil"
+    assert data.model_dump(by_alias=True)["requestorName"] == "Vladimir Keil"
+    assert "Requestor Name" not in (svc._finish(data, []).missing_fields or [])
+
+
+def test_null_requestor_name_is_missing():
+    data, _ = conv(quote([line(position="1")], requestor_name=None))
+    assert data.requestor_name == ""
+    assert "Requestor Name" in svc._finish(data, []).missing_fields
+
+
+def test_prompt_asks_for_the_buyer_contact_as_requestor():
+    prompt = svc._build_pdf_prompt("[r1] text", "")
+    assert "requestor_name is the person at the BUYER" in prompt
+    assert "requestor_name, vendor_name, vendor_tax_id" in prompt
 
 
 def test_unpriced_charges_become_warnings():
@@ -465,6 +485,13 @@ def test_field_sources_unknown_rows_dropped_and_empty_omitted():
     assert "department" in data.field_sources
 
 
+def test_requestor_field_source_resolved():
+    lt = lay(mkrow("r", "Vladimir Keil", y0=0.05, y1=0.07))
+    q = quote([], requestor_name="Vladimir Keil", field_source_rows=fsr(requestor_name=["r"]))
+    data, _ = svc.to_extracted(q, lt, GROUPS)
+    assert data.field_sources["requestorName"] == [lt.rows[0].box]
+
+
 def test_field_sources_omitted_when_value_null():
     lt = lay(mkrow("v", "EIN: 1"))
     q = quote([], vendor_tax_id=None, valid_until=None,
@@ -546,6 +573,14 @@ def test_greenmantle_tax_id_boxed_once_not_on_every_page(quote_bytes):
     assert len(fs["vatId"]) == 1
     assert "85-3252405" in covered(lt, fs["vatId"])
     assert "Fax:" not in covered(lt, fs["vatId"])
+
+
+def test_verdeform_requestor_box_covers_only_the_name(quote_bytes):
+    lt = real(quote_bytes, VERDEFORM)
+    fs = sources(lt, requestor_name="Vladimir Keil",
+                 field_source_rows=fsr(requestor_name=cite(lt, "Vladimir Keil")))
+    assert len(fs["requestorName"]) == 1
+    assert covered(lt, fs["requestorName"]) == ["Vladimir", "Keil"]
 
 
 def test_hartwell_vendor_single_box(quote_bytes):

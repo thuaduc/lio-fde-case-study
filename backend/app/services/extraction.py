@@ -237,6 +237,7 @@ Quote rows:
 
 Rules:
 - The vendor is the seller who issued the quote, never the recipient/customer.
+- requestor_name is the person at the BUYER the quote is addressed or prepared for (e.g. the name under the customer's company in the address block, 'Prepared for: Jane Doe', 'Attn: Jane Doe'), without a title such as Mr. or Ms. Never the seller's sales rep, contact or 'Prepared by'. A team or department (e.g. 'Attn: Purchasing') is not a person; use null when the quote names no buyer person.
 - vendor_tax_id is only the vendor's EIN / Tax ID. Never use a customer number, quote number or permit number; otherwise null.
 - department is the BUYER's department only, and only if the quote states one. Never use the seller's team or contact (e.g. an "Apple Business Team" on an Apple quote is not a department; use null unless the buyer's own department is stated). Never use the buyer company name.
 - Return every priced line in document order. Section headings get kind "heading".
@@ -253,7 +254,7 @@ Rules:
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
 - vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 12-3456789'); look there before giving up.
 - vendor_name: prefer the letterhead / sender line over a later mention in the terms.
-- field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 12-3456789' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
+- field_source_rows cites, for requestor_name, vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 12-3456789' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
 - Classify every line: its commodity_group_id is the SINGLE most appropriate group below for that line, or null if genuinely uncertain. Discounts, surcharges, shipping and fees tied to a position take that position's group.
 - commodity_group_id (quote level): the group of the largest share of the spend, or null if genuinely uncertain.
@@ -414,6 +415,7 @@ def boxes_for_rows(row_ids: list[str], layout: PdfLayout) -> list[Box]:
 
 # LlmFieldSources attribute -> (ExtractedVendorData wire key, LlmQuote value attribute)
 _HEADER_FIELDS = (
+    ("requestor_name", "requestorName", "requestor_name"),
     ("vendor_name", "vendorName", "vendor_name"),
     ("vendor_tax_id", "vatId", "vendor_tax_id"),
     ("department", "department", "department"),
@@ -853,6 +855,7 @@ def to_extracted(
         group_id = q.commodity_group_id
     data = ExtractedVendorData(
         title=q.title or "",
+        requestor_name=q.requestor_name or "",
         vendor_name=q.vendor_name or "",
         vat_id=q.vendor_tax_id or "",
         department=q.department or "",
@@ -872,6 +875,8 @@ def to_extracted(
 
 def _missing_fields(data: ExtractedVendorData) -> list[str]:
     missing: list[str] = []
+    if not data.requestor_name.strip():
+        missing.append("Requestor Name")
     if not data.title.strip():
         missing.append("Title/Short Description")
     if not data.vendor_name.strip():

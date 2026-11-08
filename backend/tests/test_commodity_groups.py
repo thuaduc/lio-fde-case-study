@@ -397,9 +397,10 @@ def test_older_client_update_keeps_or_rebooks_line_groups(client, acme):
 
 
 def _quote(lines, **kw):
-    fsr = LlmFieldSources(vendor_name=[], vendor_tax_id=[], department=[],
-                          quote_number=[], valid_until=[])
-    base = dict(title="Q", vendor_name="V", vendor_tax_id=None, department=None,
+    fsr = LlmFieldSources(requestor_name=[], vendor_name=[], vendor_tax_id=[],
+                          department=[], quote_number=[], valid_until=[])
+    base = dict(title="Q", requestor_name=None, vendor_name="V", vendor_tax_id=None,
+                department=None,
                 quote_number=None, valid_until=None, currency="USD", lines=lines,
                 net_total=None, tax_total=None, grand_total=None, unpriced_charges=[],
                 total_source_rows=LlmTotalSources(net=[], tax=[], grand=[]),

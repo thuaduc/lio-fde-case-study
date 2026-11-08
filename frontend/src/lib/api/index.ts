@@ -73,7 +73,10 @@ export interface WarningDetail {
 
 /** Where header values (vendor, tax ID, ...) are printed in the PDF. */
 export type FieldSources = Partial<
-  Record<'vendorName' | 'vatId' | 'department' | 'quoteNumber' | 'validUntil', SourceBox[]>
+  Record<
+    'requestorName' | 'vendorName' | 'vatId' | 'department' | 'quoteNumber' | 'validUntil',
+    SourceBox[]
+  >
 >;
 
 /** Highlight box on a PDF page; coordinates are 0-1 fractions, origin top-left. */
@@ -147,6 +150,8 @@ export interface UpdateRequestInput {
 
 export interface ExtractedVendorData {
   title: string;
+  /** The buyer's contact the quote is addressed to; empty when it names none. */
+  requestorName?: string;
   vendorName: string;
   vatId: string;
   department: string;
