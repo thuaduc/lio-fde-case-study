@@ -68,6 +68,14 @@ export default function RequestDetailPage() {
   const [linesDirty, setLinesDirty] = useState(false);
   const docPanel = useRef<DocumentPanelHandle>(null);
 
+  /** Click handler that highlights one header field, when its location is known. */
+  const showField = (key: keyof api.FieldSources) => {
+    const boxes = request?.fieldSources?.[key] ?? [];
+    return pdfUrl && boxes.length > 0
+      ? () => docPanel.current?.showSource({ sources: boxes })
+      : undefined;
+  };
+
   const adopt = (req: ProcurementRequestWithDetails) => {
     setRequest(req);
     setLines(toEditorLines(req));
@@ -321,26 +329,15 @@ export default function RequestDetailPage() {
         {/* Left column: details, order lines, activity */}
         <div className="space-y-6">
           <div className="lio-card p-6">
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold tracking-tight text-ink">Details</h2>
-              {pdfUrl && Object.values(request.fieldSources ?? {}).some((b) => (b?.length ?? 0) > 0) && (
-                <SourceButton
-                  label="Show details in document"
-                  onClick={() =>
-                    docPanel.current?.showSource({
-                      sources: Object.values(request.fieldSources ?? {}).flatMap((b) => b ?? []),
-                    })
-                  }
-                />
-              )}
-            </div>
+            <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Details</h2>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <Field label="Requestor" value={request.requestor_name} />
-              <Field label="Department" value={request.department || '—'} />
-              <Field label="Vendor" value={request.vendor_name} />
-              <Field label="Tax ID" value={request.vat_id || '—'} />
-              <Field label="Quote number" value={request.quoteNumber || '—'} />
+              <Field label="Department" value={request.department || '—'} onShow={showField('department')} />
+              <Field label="Vendor" value={request.vendor_name} onShow={showField('vendorName')} />
+              <Field label="Tax ID" value={request.vat_id || '—'} onShow={showField('vatId')} />
+              <Field label="Quote number" value={request.quoteNumber || '—'} onShow={showField('quoteNumber')} />
               <Field
+                onShow={showField('validUntil')}
                 label="Valid until"
                 value={request.validUntil ? new Date(`${request.validUntil}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '—'}
               />
@@ -491,10 +488,13 @@ export default function RequestDetailPage() {
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value, onShow }: { label: string; value: string; onShow?: () => void }) {
   return (
     <div>
-      <dt className="text-ink/45 font-medium">{label}</dt>
+      <dt className="flex h-5 items-center gap-1 text-ink/45 font-medium">
+        {label}
+        {onShow && <SourceButton className="h-6 w-6 -my-0.5" label={`Show ${label.toLowerCase()} in document`} onClick={onShow} />}
+      </dt>
       <dd className="text-ink mt-0.5">{value}</dd>
     </div>
   );

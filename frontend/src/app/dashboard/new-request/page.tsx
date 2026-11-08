@@ -60,20 +60,22 @@ export default function NewRequestPage() {
   const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
   const [fieldSources, setFieldSources] = useState<api.FieldSources>({});
 
-  /** All boxes for the given header fields, for one "show in document" click. */
-  const boxesFor = (...keys: (keyof api.FieldSources)[]) =>
-    keys.flatMap((k) => fieldSources[k] ?? []);
-  const sectionHeading = (title: string, boxes: api.SourceBox[]) => (
-    <div className="mb-4 flex items-center justify-between gap-2">
-      <h2 className="text-xl font-semibold tracking-tight text-ink">{title}</h2>
-      {fileUrl && boxes.length > 0 && (
-        <SourceButton
-          label={`Show ${title.toLowerCase()} in document`}
-          onClick={() => docPanel.current?.showSource({ sources: boxes })}
-        />
-      )}
-    </div>
-  );
+  /** Label row with an eye button when the field's value is located in the PDF. */
+  const fieldLabel = (text: string, key: keyof api.FieldSources) => {
+    const boxes = fieldSources[key] ?? [];
+    return (
+      <div className="mb-1.5 flex h-5 items-center justify-between">
+        <span className="text-sm font-medium text-ink/70">{text}</span>
+        {fileUrl && boxes.length > 0 && (
+          <SourceButton
+            className="h-6 w-6 -my-0.5"
+            label={`Show ${text.replace(' *', '').toLowerCase()} in document`}
+            onClick={() => docPanel.current?.showSource({ sources: boxes })}
+          />
+        )}
+      </div>
+    );
+  };
   const totals = computeTotals(orderLines, taxTotal);
 
   // ---- Drafts (server-side, Gmail-style): load ?draft=<id>, autosave, delete on submit.
@@ -456,7 +458,7 @@ export default function NewRequestPage() {
 
         {/* Request Details */}
         <div className="lio-card p-6 space-y-4">
-          {sectionHeading('Request Details', boxesFor('department'))}
+          <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Request Details</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
@@ -467,12 +469,15 @@ export default function NewRequestPage() {
               placeholder="John Doe"
             />
 
-            <Input
-              label="Department"
+            <div>
+              {fieldLabel('Department', 'department')}
+              <Input
+                aria-label="Department"
               value={department}
               onChange={(e) => setDepartment(e.target.value)}
               placeholder="IT Department"
             />
+            </div>
           </div>
 
           <Input
@@ -486,37 +491,49 @@ export default function NewRequestPage() {
 
         {/* Vendor Information */}
         <div className="lio-card p-6 space-y-4">
-          {sectionHeading('Vendor Information', boxesFor('vendorName', 'vatId', 'quoteNumber', 'validUntil'))}
+          <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Vendor Information</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              label="Vendor Name *"
+            <div>
+              {fieldLabel('Vendor Name *', 'vendorName')}
+              <Input
+                aria-label="Vendor Name"
               value={vendorName}
               onChange={(e) => setVendorName(e.target.value)}
               required
               placeholder="Adobe Systems"
             />
+            </div>
 
-            <Input
-              label="Tax ID"
+            <div>
+              {fieldLabel('Tax ID', 'vatId')}
+              <Input
+                aria-label="Tax ID"
               value={vatId}
               onChange={(e) => setVatId(e.target.value)}
               placeholder="12-3456789"
             />
+            </div>
 
-            <Input
-              label="Quote number"
+            <div>
+              {fieldLabel('Quote number', 'quoteNumber')}
+              <Input
+                aria-label="Quote number"
               value={quoteNumber}
               onChange={(e) => setQuoteNumber(e.target.value)}
               placeholder="Q-2024-001"
             />
+            </div>
 
-            <Input
-              label="Valid until"
+            <div>
+              {fieldLabel('Valid until', 'validUntil')}
+              <Input
+                aria-label="Valid until"
               type="date"
               value={validUntil}
               onChange={(e) => setValidUntil(e.target.value)}
             />
+            </div>
           </div>
 
           <div>
