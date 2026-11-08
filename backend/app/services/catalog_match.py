@@ -26,7 +26,7 @@ from app.services import extraction
 
 logger = logging.getLogger(__name__)
 
-SHORTLIST_K = 8
+SHORTLIST_K = 20
 FUZZY_SHORTLIST_CUTOFF = 60
 FUZZY_CONFIRM_CUTOFF = 80
 MAX_SUGGESTIONS = 3

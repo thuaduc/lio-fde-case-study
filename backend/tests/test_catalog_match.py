@@ -304,6 +304,21 @@ def test_embedding_shortlist_finds_synonym(client, org, monkeypatch):
     assert len(fake.embedding_calls) == 1
 
 
+def test_shortlist_keeps_twenty_candidates_by_default():
+    """Near-identical variants (14" i5 / i7 / ...) must not crowd out real options."""
+    articles = [
+        Article(id=uuid.uuid4(), article_number=f"A-{n:02d}", description=f"Item {n}",
+                unit="each", unit_price=10)
+        for n in range(25)
+    ]
+    vectors = {"query": [1.0, 0.0]} | {
+        a.description: [1.0, n / 10] for n, a in enumerate(articles)
+    }
+    hits = cm.shortlist("query", articles, vectors=vectors)
+    assert len(hits) == 20
+    assert [h.article.article_number for h in hits[:3]] == ["A-00", "A-01", "A-02"]
+
+
 def test_embeddings_cached_by_text_hash(client, monkeypatch):
     fake = use(monkeypatch, FakeClient())
     texts = [MOSS, LAPTOP, "  " + MOSS.upper() + "  "]  # third normalises to the first
