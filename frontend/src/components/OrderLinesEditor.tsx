@@ -274,9 +274,10 @@ export default function OrderLinesEditor({
             }
           />
           <Input
-            label="Discount / surcharge (%)"
+            label="Adjustment (%)"
+            title="Negative = discount, positive = surcharge (e.g. -20)"
             inputMode="decimal"
-            placeholder="—"
+            placeholder="e.g. -20"
             value={line.adjustmentPercent ?? ''}
             onChange={(e) => {
               const adj = toNum(e.target.value);
