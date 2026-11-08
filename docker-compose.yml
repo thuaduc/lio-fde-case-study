@@ -23,6 +23,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6.1-sol}
       OPENAI_TEMPERATURE: ${OPENAI_TEMPERATURE:-none}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       CORS_ORIGINS: http://localhost:3200
     depends_on:
       db:

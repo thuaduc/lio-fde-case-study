@@ -1,6 +1,7 @@
 """SQLAlchemy models. Importing this package registers every table on ``Base.metadata``."""
 
 from app.models.article import Article
+from app.models.article_embedding import ArticleEmbedding
 from app.models.commodity_group import CommodityGroup
 from app.models.organization import (
     Organization,
@@ -31,4 +32,5 @@ __all__ = [
     "RequestDraft",
     "Supplier",
     "Article",
+    "ArticleEmbedding",
 ]

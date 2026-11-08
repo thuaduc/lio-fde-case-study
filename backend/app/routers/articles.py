@@ -5,7 +5,14 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.deps import get_current_membership
 from app.db.session import get_db
 from app.models import Article, OrganizationMember
-from app.schemas.articles import ArticleOut, ArticlePage
+from app.schemas.articles import (
+    ArticleOut,
+    ArticlePage,
+    ArticleSuggestionOut,
+    LineSuggestionsOut,
+    SuggestionsRequest,
+)
+from app.services import catalog_match
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
@@ -74,3 +81,42 @@ def count_articles(
         or 0
     )
     return {"count": total}
+
+
+@router.post("/suggestions", response_model=list[LineSuggestionsOut])
+def suggest_articles(
+    payload: SuggestionsRequest,
+    membership: OrganizationMember = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> list[LineSuggestionsOut]:
+    """Negotiated catalog articles (at most 3 per line, cheapest first)."""
+    queries = [
+        catalog_match.LineQuery(
+            description=ln.description,
+            unit=ln.unit,
+            unit_price=ln.unit_price,
+            vendor_item_number=ln.vendor_item_number,
+        )
+        for ln in payload.lines
+    ]
+    results = catalog_match.suggest(db, membership.organization_id, queries)
+    return [
+        LineSuggestionsOut(
+            line_index=i,
+            suggestions=[
+                ArticleSuggestionOut(
+                    article_id=s.article.id,
+                    article_number=s.article.article_number,
+                    supplier_name=s.article.supplier.name if s.article.supplier else None,
+                    description=s.article.description,
+                    unit_price=s.article.unit_price,
+                    unit=s.article.unit,
+                    quantity=s.article.quantity,
+                    match_type=s.match_type,
+                    saving_per_unit=s.saving_per_unit,
+                )
+                for s in suggestions
+            ],
+        )
+        for i, suggestions in enumerate(results)
+    ]

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-6.1-sol"
     # OPENAI_TEMPERATURE=none omits the parameter (some models reject it).
     openai_temperature: float | None = None
+    openai_embedding_model: str = "text-embedding-3-small"
 
     # CORS — NoDecode lets us accept a plain comma-separated string instead of
     # the JSON list pydantic-settings would otherwise demand from env vars.
