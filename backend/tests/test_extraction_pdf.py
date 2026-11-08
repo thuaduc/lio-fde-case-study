@@ -15,7 +15,10 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CommodityGroup, Organization
-from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote
+from app.schemas.extraction import (
+    ExtractionResponse, LlmFieldSources, LlmLine, LlmQuote, LlmTotalSources,
+    LlmUnpricedCharge,
+)
 from app.services import extraction as svc
 from app.services.pdf_layout import Box, PdfLayout, PdfRow, Word
 
@@ -40,12 +43,18 @@ def fsr(**kw) -> LlmFieldSources:
     return LlmFieldSources(**base)
 
 
+def tsr(**kw) -> LlmTotalSources:
+    base = dict(net=[], tax=[], grand=[])
+    base.update(kw)
+    return LlmTotalSources(**base)
+
+
 def quote(lines, **kw) -> LlmQuote:
     base = dict(
         title="Quote", vendor_name="Acme", vendor_tax_id="12-3456789", department="IT",
         quote_number="Q1", valid_until="2026-12-31", currency="USD", lines=lines,
         net_total=None, tax_total=None, grand_total=None, unpriced_charges=[],
-        commodity_group_id=None, field_source_rows=fsr(),
+        total_source_rows=tsr(), commodity_group_id=None, field_source_rows=fsr(),
     )
     base.update(kw)
     return LlmQuote(**base)
@@ -90,7 +99,7 @@ def test_unknown_parent_dropped():
     alt, sur = data.order_lines[1], data.order_lines[2]
     assert alt.parent_key is None and alt.kind == "optional"
     assert sur.parent_key is None and sur.kind == "surcharge"
-    assert any("9" in w for w in warnings)
+    assert any("9" in w for w in msgs(warnings))
 
 
 def test_item_parent_always_null():
@@ -125,8 +134,9 @@ def test_null_tax_id_success():
 
 
 def test_unpriced_charges_become_warnings():
-    _, w = conv(quote([line(position="1")], unpriced_charges=["fuel surcharge"]))
-    assert "Quote mentions a charge without an amount: fuel surcharge" in w
+    _, w = conv(quote([line(position="1")], unpriced_charges=[
+        LlmUnpricedCharge(text="fuel surcharge", source_rows=[])]))
+    assert "Quote mentions a charge without an amount: fuel surcharge" in msgs(w)
 
 
 def test_total_cost_is_grand_total():
@@ -400,14 +410,14 @@ def test_unverified_price_warns():
     l = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
              source_rows=["a"])
     _, w = svc.to_extracted(quote([l]), lay(mkrow("a", "Panel 999.00")), GROUPS)
-    assert "Couldn't find line 2's price ($715.26) in the document" in w
+    assert "Couldn't find line 2's price ($715.26) in the document" in msgs(w)
     l2 = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
               source_rows=["a"])
     _, w2 = svc.to_extracted(quote([l2]), lay(mkrow("a", "Panel 715.26")), GROUPS)
-    assert not any("Couldn't find" in x for x in w2)
+    assert not any("Couldn't find" in x for x in msgs(w2))
     z = line(position="3", quantity=0, unit_price=0, total_price=0)
     _, w3 = svc.to_extracted(quote([z]), lay(), GROUPS)
-    assert not any("Couldn't find" in x for x in w3)
+    assert not any("Couldn't find" in x for x in msgs(w3))
 
 
 def el(key, total, kind="item", parent=None):
@@ -419,7 +429,7 @@ def test_lines_vs_net_warns():
     lines = [el("1", 100), el("2", 50), el("3", 900, kind="optional"),
              el("4", -5, kind="discount", parent="3")]
     w = svc.reconcile(lines, 160.0, None, None)
-    assert w == ["Line items add up to $150.00 but the quote's net total is $160.00"]
+    assert msgs(w) == ["Line items add up to $150.00 but the quote's net total is $160.00"]
     assert svc.reconcile(lines, 150.0, None, None) == []
 
 
@@ -429,7 +439,7 @@ def test_total_only_shipping_line_normalised():
     data, w = conv(quote([ship]))
     ln = data.order_lines[0]
     assert (ln.amount, ln.unit_price, ln.total_price) == (1, 215.0, 215.0)
-    assert not any("quantity x unit price" in x for x in w)
+    assert not any("quantity x unit price" in x for x in msgs(w))
 
 
 def test_zero_qty_zero_price_with_total_normalised():
@@ -463,7 +473,7 @@ def test_apple_fee_after_items_subtotal_is_consistent():
 def test_missing_fee_still_warns_on_grand_total():
     # Same quote with the $4 fee line dropped: lines + tax miss the grand total.
     w = svc.reconcile([el("1", 1409.06)], 1409.06, 121.53, 1534.59)
-    assert w == ["Line items $1,409.06 plus tax $121.53 come to $1,530.59 but the quote's grand total is $1,534.59"]
+    assert msgs(w) == ["Line items $1,409.06 plus tax $121.53 come to $1,530.59 but the quote's grand total is $1,534.59"]
 
 
 def test_totals_tolerance_scales_with_active_lines():
@@ -491,7 +501,7 @@ def test_quantity_kept_when_unit_price_missing():
     data, w = conv(quote([l]))
     ln = data.order_lines[0]
     assert (ln.amount, ln.unit_price, ln.total_price) == (4, 25.0, 100.0)
-    assert not any("quantity x unit price" in x for x in w)
+    assert not any("quantity x unit price" in x for x in msgs(w))
 
 
 def test_inexact_split_keeps_stated_total():
@@ -545,15 +555,15 @@ def test_prompt_short_line_descriptions():
 def test_line_math_warns():
     l = line(position="1", quantity=3, unit_price=10.0, total_price=45.0)
     _, w = svc.to_extracted(quote([l]), lay(), GROUPS)
-    assert any("line 1" in x.lower() and "$45.00" in x and "$30.00" in x for x in w)
+    assert any("line 1" in x.lower() and "$45.00" in x and "$30.00" in x for x in msgs(w))
     ok = line(position="1", quantity=3, unit_price=10.0, total_price=30.0)
     _, w2 = svc.to_extracted(quote([ok]), lay(), GROUPS)
-    assert not any("quantity" in x for x in w2)
+    assert not any("quantity" in x for x in msgs(w2))
 
 
 def test_net_plus_tax_vs_grand_warns():
     w = svc.reconcile([el("1", 100)], 100.0, 8.0, 110.0)
-    assert w == ["Line items $100.00 plus tax $8.00 come to $108.00 but the quote's grand total is $110.00"]
+    assert msgs(w) == ["Line items $100.00 plus tax $8.00 come to $108.00 but the quote's grand total is $110.00"]
     assert svc.reconcile([el("1", 100)], 100.0, 8.0, 108.0) == []
 
 
@@ -836,3 +846,166 @@ def test_single_char_tokens_ignored_in_segment_fallback():
     row = wrow("a", "A Zed Corp", gap=0.05)
     lt, fs = synth(row, attr="vendor_name", vendor_name="A Quux Ltd")
     assert "vendorName" not in fs
+
+
+# --- warning source highlights ------------------------------------------------
+
+
+def msgs(details):
+    return [d.message for d in details]
+
+
+def prow(rid, y, *pairs, page=1):
+    """Row with explicit word positions: pairs of (text, x0, x1)."""
+    words = [Word(text=t, x0=a, x1=b) for t, a, b in pairs]
+    return mkrow(rid, " ".join(t for t, _, _ in pairs), page=page, y0=y, y1=y + 0.02,
+                 words=words)
+
+
+def test_unpriced_charge_schema_is_strict():
+    with pytest.raises(Exception):
+        LlmUnpricedCharge(text="x")
+    with pytest.raises(Exception):
+        LlmTotalSources(net=[], tax=[])
+    props = LlmQuote.model_json_schema()["$defs"]
+    assert set(props["LlmUnpricedCharge"]["required"]) == {"text", "source_rows"}
+    assert set(props["LlmTotalSources"]["required"]) == {"net", "tax", "grand"}
+
+
+def test_unpriced_charges_each_get_word_tight_boxes():
+    lt = lay(
+        prow("f", 0.40, ("Fuel", 0.10, 0.14), ("surcharge", 0.15, 0.23), ("TBD", 0.80, 0.85)),
+        prow("r", 0.45, ("Rush", 0.10, 0.14), ("surcharge:", 0.15, 0.24),
+             ("25%", 0.25, 0.28), ("of", 0.29, 0.31), ("freight", 0.32, 0.38)),
+    )
+    q = quote([line(position="1", quantity=0, unit_price=0, total_price=0)], unpriced_charges=[
+        LlmUnpricedCharge(text="Fuel surcharge", source_rows=["f"]),
+        LlmUnpricedCharge(text="Rush surcharge: 25% of freight, if rush", source_rows=["r"]),
+    ])
+    _, details = svc.to_extracted(q, lt, GROUPS)
+    assert msgs(details) == [
+        "Quote mentions a charge without an amount: Fuel surcharge",
+        "Quote mentions a charge without an amount: Rush surcharge: 25% of freight, if rush",
+    ]
+    fuel, rush = details
+    assert len(fuel.sources) == 1 and len(rush.sources) >= 1
+    assert covered(lt, fuel.sources) == ["Fuel", "surcharge"]
+    assert fuel.sources[0].x1 < 0.5  # not the TBD column
+    assert covered(lt, rush.sources)[:2] == ["Rush", "surcharge:"]
+
+
+def test_unpriced_charge_without_citation_has_no_sources():
+    q = quote([line(position="1")], unpriced_charges=[
+        LlmUnpricedCharge(text="Handling", source_rows=["nope"])])
+    _, details = svc.to_extracted(q, lay(), GROUPS)
+    assert details[0].sources == []
+
+
+def _apple_like():
+    lt = lay(
+        prow("l1", 0.30, ("MacBook", 0.10, 0.18), ("Air", 0.19, 0.22), ("1,400.00", 0.80, 0.88)),
+        prow("n", 0.60, ("Subtotal", 0.50, 0.58), ("$1,400.00", 0.80, 0.90)),
+        prow("t", 0.64, ("Tax", 0.50, 0.54), ("$121.53", 0.82, 0.90)),
+        prow("g", 0.68, ("Total", 0.50, 0.55), ("$1,534.59", 0.80, 0.90)),
+    )
+    q = quote([line(position="1", unit_price=1400, total_price=1400, source_rows=["l1"])],
+              net_total=1400.0, tax_total=121.53, grand_total=1534.59,
+              total_source_rows=tsr(net=["n"], tax=["t"], grand=["g"]))
+    return lt, q
+
+
+def test_grand_total_warning_boxes_grand_and_tax_amounts():
+    lt, q = _apple_like()
+    _, details = svc.to_extracted(q, lt, GROUPS)
+    assert msgs(details) == [
+        "Line items $1,400.00 plus tax $121.53 come to $1,521.53 but the quote's grand total is $1,534.59"
+    ]
+    boxes = details[0].sources
+    assert covered(lt, boxes) == ["$1,534.59", "$121.53"] or covered(lt, boxes) == ["$121.53", "$1,534.59"]
+    assert all(b.x1 - b.x0 < 0.2 for b in boxes)  # amounts, never full rows
+
+
+def test_net_warning_boxes_net_row():
+    lt = lay(prow("n", 0.60, ("Net", 0.50, 0.54), ("110.00", 0.80, 0.88)),
+             prow("l", 0.30, ("Panel", 0.10, 0.15), ("100.00", 0.80, 0.88)))
+    q = quote([line(position="1", unit_price=100, total_price=100, source_rows=["l"])],
+              net_total=110.0,
+              total_source_rows=tsr(net=["n"]))
+    _, details = svc.to_extracted(q, lt, GROUPS)
+    assert len(details) == 1 and "net total" in details[0].message
+    assert covered(lt, details[0].sources) == ["110.00"]
+
+
+def test_total_row_cited_for_tax_and_grand_is_deduped():
+    lt = lay(prow("tg", 0.6, ("Total", 0.5, 0.55), ("$1,534.59", 0.8, 0.9)))
+    boxes = svc.total_boxes(1534.59, ["tg"], lt) + svc.total_boxes(1534.59, ["tg"], lt)
+    assert len(svc._dedupe(boxes)) == 1
+    # tax == grand amount cited on one row -> one box in the warning
+    q = quote([line(position="1", unit_price=1000, total_price=1000)],
+              tax_total=1534.59, grand_total=1534.59,
+              total_source_rows=tsr(tax=["tg"], grand=["tg"]))
+    _, details = svc.to_extracted(q, lt, GROUPS)
+    grand = [d for d in details if "grand total" in d.message][0]
+    assert len(grand.sources) == 1
+
+
+def test_total_without_words_is_dropped_not_full_row():
+    lt = lay(mkrow("g", "Total $1,534.59"))
+    assert svc.total_boxes(1534.59, ["g"], lt) == []
+
+
+def test_total_falls_back_to_gap_segment_with_the_number():
+    # number fused with text so no whole-word match; its gap segment is boxed
+    lt = lay(prow("g", 0.6, ("Grand", 0.5, 0.54), ("total", 0.55, 0.59),
+                  ("(USD)", 0.60, 0.64), ("1534.59x", 0.85, 0.9)))
+    boxes = svc.total_boxes(1534.59, ["g"], lt)
+    assert len(boxes) == 1 and boxes[0].x0 >= 0.85 - 1e-9
+
+
+def test_line_warnings_carry_the_lines_sources():
+    lt = lay(prow("a", 0.3, ("Panel", 0.1, 0.15), ("999.00", 0.8, 0.88)))
+    l = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
+             source_rows=["a"])
+    _, details = svc.to_extracted(quote([l]), lt, GROUPS)
+    d = [x for x in details if "Couldn't find" in x.message][0]
+    assert d.sources and d.sources[0].y0 == pytest.approx(0.3)
+    l2 = line(position="3", quantity=3, unit_price=10.0, total_price=45.0, source_rows=["a"])
+    _, d2 = svc.to_extracted(quote([l2]), lt, GROUPS)
+    assert [x for x in d2 if "quantity" in x.message][0].sources
+    l3 = line(position="4", kind="surcharge", parent_position="9", source_rows=["a"])
+    _, d3 = svc.to_extracted(quote([l3]), lt, GROUPS)
+    assert [x for x in d3 if "parent position" in x.message][0].sources
+
+
+def test_warning_without_location_has_empty_sources():
+    l = line(position="2", kind="surcharge", parent_position="9")
+    _, details = svc.to_extracted(quote([l]), lay(), GROUPS)
+    assert details[0].sources == []
+
+
+def test_response_warnings_derive_from_details():
+    lt, q = _apple_like()
+    data, details = svc.to_extracted(q, lt, GROUPS)
+    resp = svc._finish(data, details)
+    assert resp.warnings == [d.message for d in resp.warning_details]
+    wire = resp.model_dump(by_alias=True)
+    assert wire["warnings"] == [d["message"] for d in wire["warningDetails"]]
+    assert wire["warningDetails"][0]["sources"][0].keys() >= {"page", "x0", "y0", "x1", "y1"}
+    assert ExtractionResponse(success=True).warning_details is None
+
+
+def test_prompt_describes_new_fields():
+    p = svc._build_pdf_prompt("", "")
+    assert "total_source_rows" in p and "source_rows" in p and "unpriced_charges" in p
+
+
+def test_verdeform_unpriced_charges_boxed(quote_bytes):
+    lt = real(quote_bytes, VERDEFORM)
+    fuel = cite(lt, "Fuel surcharge")
+    rush = cite(lt, "Rush surcharge")
+    assert fuel and rush
+    q = quote([], unpriced_charges=[
+        LlmUnpricedCharge(text="Fuel surcharge", source_rows=fuel),
+        LlmUnpricedCharge(text="Rush surcharge", source_rows=rush)])
+    _, details = svc.to_extracted(q, lt, GROUPS)
+    assert len(details) == 2 and all(d.sources for d in details)

@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.schemas.extraction import LineKind
+from app.schemas.extraction import LineKind, WarningList
 from app.services.pdf_layout import Box
 
 RequestStatus = Literal["open", "in_progress", "closed"]
@@ -69,7 +69,7 @@ class RequestCreate(BaseModel):
     valid_until: date | None = Field(default=None, alias="validUntil")
     currency: str | None = None
     tax_total: float | None = Field(default=None, alias="taxTotal")
-    extraction_warnings: list[str] | None = Field(
+    extraction_warnings: WarningList | None = Field(
         default=None, alias="extractionWarnings"
     )
     field_sources: dict[str, list[Box]] | None = Field(
@@ -94,7 +94,7 @@ class RequestUpdate(BaseModel):
     valid_until: date | None = Field(default=None, alias="validUntil")
     currency: str | None = None
     tax_total: float | None = Field(default=None, alias="taxTotal")
-    extraction_warnings: list[str] | None = Field(
+    extraction_warnings: WarningList | None = Field(
         default=None, alias="extractionWarnings"
     )
     field_sources: dict[str, list[Box]] | None = Field(
@@ -216,7 +216,7 @@ class RequestOut(BaseModel):
     currency: str | None = None
     net_total: float | None = Field(default=None, serialization_alias="netTotal")
     tax_total: float | None = Field(default=None, serialization_alias="taxTotal")
-    extraction_warnings: list[str] | None = Field(
+    extraction_warnings: WarningList | None = Field(
         default=None, serialization_alias="extractionWarnings"
     )
     field_sources: dict[str, list[Box]] | None = Field(

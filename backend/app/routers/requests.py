@@ -221,6 +221,12 @@ def _dump_field_sources(fs) -> dict | None:
     return {k: [b.model_dump() for b in boxes] for k, boxes in fs.items()}
 
 
+def _dump_warnings(warnings) -> list | None:
+    if warnings is None:
+        return None
+    return [w.model_dump() for w in warnings]
+
+
 def _json_sources(sources) -> str:
     return json.dumps(
         [b.model_dump() if hasattr(b, "model_dump") else b for b in sources or []],
@@ -499,7 +505,7 @@ def create_request(
         quote_number=payload.quote_number,
         valid_until=payload.valid_until,
         currency=payload.currency or "USD",
-        extraction_warnings=payload.extraction_warnings,
+        extraction_warnings=_dump_warnings(payload.extraction_warnings),
         field_sources=_dump_field_sources(payload.field_sources),
         department=payload.department,
         organization_id=membership.organization_id,
@@ -595,7 +601,7 @@ def update_request(
     if "currency" in sent and payload.currency:
         request.currency = payload.currency
     if "extraction_warnings" in sent:
-        request.extraction_warnings = payload.extraction_warnings
+        request.extraction_warnings = _dump_warnings(payload.extraction_warnings)
     if "field_sources" in sent:
         request.field_sources = _dump_field_sources(payload.field_sources)
 

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import CommodityGroup
 from app.schemas.extraction import (
+    WarningDetail,
     ExtractedLine,
     ExtractedVendorData,
     ExtractionResponse,
@@ -239,9 +240,10 @@ Rules:
 - Lines labelled alternative or option are kind "alternative", with parent_position set to the position of the item they replace. Optional add-ons are kind "optional" (parent_position = the item they are an add-on to, or null).
 - Discounts, surcharges, shipping and fees that the quote ties to one position get that parent_position; otherwise parent_position is null (applies to the whole quote).
 - A line-level "Disc./Surch." percentage goes into list_unit_price (the price before the adjustment) and adjustment_percent (negative = discount, positive = surcharge). unit_price is the effective price.
-- Document-level discounts or surcharges that have an amount become their own lines (kind "discount" with a negative total, or "surcharge"). If they have no amount, list them in unpriced_charges instead.
+- Document-level discounts or surcharges that have an amount become their own lines (kind "discount" with a negative total, or "surcharge"). If they have no amount, list them in unpriced_charges instead: text is the charge as printed, source_rows the id(s) of the row(s) where it is printed.
 - Shipping and freight are kind "shipping"; recycling and handling fees are kind "fee".
 - Use plain numbers only (no currency symbols). US number formatting: "1,438.00" = 1438.00. Write units out in plain English (e.g. "ea." -> "pieces").
+- total_source_rows cites, for net, tax and grand, the row id(s) where that total's amount is printed (e.g. the 'Total $1,534.59' row); an empty list when the quote does not print it.
 - net_total is the subtotal before tax, tax_total the tax, grand_total the amount payable including tax.
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
 - vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 12-3456789'); look there before giving up.
@@ -511,10 +513,8 @@ def _find_window(row, words: list[Word], targets: list[str], norm,
     return _union(row.page, row, words[i:j + 1])
 
 
-def _segment_box(row, tokens: set[str]) -> Box | None:
-    """Box of the first gap-separated segment of the row that shares a token."""
-    if not row.words:
-        return row.box if tokens & _tokens(row.text) else None
+def _gap_segments(row) -> list[list[Word]]:
+    """The row's words grouped into gap-separated segments (columns)."""
     seg: list[Word] = []
     segments: list[list[Word]] = []
     prev: Word | None = None
@@ -524,7 +524,14 @@ def _segment_box(row, tokens: set[str]) -> Box | None:
             segments.append(seg)
         seg.append(w)
         prev = w
-    for seg in segments:
+    return segments
+
+
+def _segment_box(row, tokens: set[str]) -> Box | None:
+    """Box of the first gap-separated segment of the row that shares a token."""
+    if not row.words:
+        return row.box if tokens & _tokens(row.text) else None
+    for seg in _gap_segments(row):
         if tokens & _tokens(" ".join(w.text for w in seg)):
             return _union(row.page, row, seg)
     return None
@@ -585,6 +592,62 @@ def resolve_field_sources(q: LlmQuote, layout: PdfLayout) -> dict[str, list[Box]
     return out
 
 
+def _dedupe(boxes: list[Box]) -> list[Box]:
+    out: list[Box] = []
+    for b in boxes:
+        if b not in out:
+            out.append(b)
+    return out
+
+
+def charge_boxes(text: str, row_ids: list[str], layout: PdfLayout) -> list[Box]:
+    """One word-tight box for an unpriced charge: the first cited row where the
+    charge's words (whole text, then the part before a colon / bracket) appear as
+    whole words; else the gap-segment of the first cited row sharing a word."""
+    candidates = [text]
+    head = re.split(r"[:(\u2013\u2014]| - ", text, maxsplit=1)[0].strip()
+    if head and head != text:
+        candidates.append(head)
+    rows = _cited_rows(row_ids, layout)
+    for row in rows:
+        if not row.words:
+            continue
+        for cand in candidates:
+            target = _norm(cand)
+            box = _find_window(row, row.words, [target], _norm, False, False) if target else None
+            if box is not None:
+                return [box]
+    for row in rows:
+        box = _segment_box(row, _tokens(head or text))
+        if box is not None:
+            return [box]
+    return []
+
+
+def total_boxes(amount: float | None, row_ids: list[str], layout: PdfLayout) -> list[Box]:
+    """Word-tight box on the printed amount in the cited rows; else the gap
+    segment holding the number; else nothing (never a full-width row)."""
+    if amount is None:
+        return []
+    forms = {_digits(f"{abs(amount):.2f}")}
+    if float(abs(amount)).is_integer():
+        forms.add(str(int(abs(amount))))
+    boxes: list[Box] = []
+    for row in _cited_rows(row_ids, layout):
+        if not row.words:
+            continue
+        box = _find_window(row, row.words, sorted(forms), _digits, False, False)
+        if box is None:
+            for seg in _gap_segments(row):
+                text = " ".join(w.text for w in seg)
+                if any(abs(n - abs(amount)) <= 0.005 for n in _numbers(text)):
+                    box = _union(row.page, row, seg)
+                    break
+        if box is not None:
+            boxes.append(box)
+    return _dedupe(boxes)
+
+
 def resolve_sources(
     line: LlmLine, layout: PdfLayout
 ) -> tuple[list[Box], str | None, bool]:
@@ -612,14 +675,19 @@ def reconcile(
     net_total: float | None,
     tax_total: float | None,
     grand_total: float | None,
-) -> list[str]:
+    total_sources: dict[str, list[Box]] | None = None,
+) -> list[WarningDetail]:
     """Warnings where the quote's stated totals disagree with its lines.
 
     The deciding check is active lines + tax against the grand total. When it
     holds, the quote is consistent even if its stated "net" or "subtotal" is
     items only (Apple adds a $4 recycling fee after the subtotal).
+
+    total_sources maps net/tax/grand to the boxes of the printed amounts; the
+    grand-total warning points at grand + tax, the net warning at net.
     """
-    warnings: list[str] = []
+    warnings: list[WarningDetail] = []
+    total_sources = total_sources or {}
     keys = active_keys(lines)
     active = [ln for ln in lines if ln.key in keys]
     tol = _totals_tol(len(active))
@@ -635,26 +703,34 @@ def reconcile(
         if abs(expected - grand_total) <= tol:
             return warnings
         tax_words = f" plus tax {_money(tax_total)}" if tax_total else ""
-        warnings.append(
-            f"Line items {_money(lines_sum)}{tax_words} come to {_money(expected)} "
-            f"but the quote's grand total is {_money(grand_total)}"
-        )
+        warnings.append(WarningDetail(
+            message=(
+                f"Line items {_money(lines_sum)}{tax_words} come to {_money(expected)} "
+                f"but the quote's grand total is {_money(grand_total)}"
+            ),
+            sources=_dedupe(
+                total_sources.get("grand", []) + total_sources.get("tax", [])
+            ),
+        ))
 
     if net_total is not None and all(
         abs(s - net_total) > tol for s in (lines_sum, items_sum)
     ):
-        warnings.append(
-            f"Line items add up to {_money(lines_sum)} but the quote's net "
-            f"total is {_money(net_total)}"
-        )
+        warnings.append(WarningDetail(
+            message=(
+                f"Line items add up to {_money(lines_sum)} but the quote's net "
+                f"total is {_money(net_total)}"
+            ),
+            sources=list(total_sources.get("net", [])),
+        ))
     return warnings
 
 
 def to_extracted(
     q: LlmQuote, layout: PdfLayout, groups: dict[int, str]
-) -> tuple[ExtractedVendorData, list[str]]:
-    """Turn the model's quote into API data plus human-readable warnings."""
-    warnings: list[str] = []
+) -> tuple[ExtractedVendorData, list[WarningDetail]]:
+    """Turn the model's quote into API data plus warnings with their source boxes."""
+    warnings: list[WarningDetail] = []
     kept = [ln for ln in q.lines if ln.kind != "heading"]
     keys, pos_to_key = _unique_keys(kept)
 
@@ -662,14 +738,18 @@ def to_extracted(
     for ln, key in zip(kept, keys):
         ln = _normalise_line(ln)
         kind = ln.kind  # never "heading" here
+        boxes, source_text, verified = resolve_sources(ln, layout)
         parent_key: str | None = None
         if kind != "item" and ln.parent_position:
             parent_key = pos_to_key.get(ln.parent_position.strip())
             if parent_key is None:
-                warnings.append(
-                    f"Line {key}: parent position {ln.parent_position} not found; "
-                    "treated as not linked"
-                )
+                warnings.append(WarningDetail(
+                    message=(
+                        f"Line {key}: parent position {ln.parent_position} not found; "
+                        "treated as not linked"
+                    ),
+                    sources=boxes,
+                ))
             elif parent_key == key:
                 parent_key = None
         if kind == "alternative" and parent_key is None:
@@ -678,15 +758,18 @@ def to_extracted(
         if ln.total_price is not None and ln.quantity and unit_price:
             expected = _round(ln.quantity * unit_price)
             if abs(abs(ln.total_price) - abs(expected)) > _tol(expected):
-                warnings.append(
-                    f"Line {key}: total {_money(ln.total_price)} doesn't match "
-                    f"quantity x unit price ({_money(expected)})"
-                )
-        boxes, source_text, verified = resolve_sources(ln, layout)
+                warnings.append(WarningDetail(
+                    message=(
+                        f"Line {key}: total {_money(ln.total_price)} doesn't match "
+                        f"quantity x unit price ({_money(expected)})"
+                    ),
+                    sources=boxes,
+                ))
         if total and not verified:
-            warnings.append(
-                f"Couldn't find line {key}'s price ({_money(total)}) in the document"
-            )
+            warnings.append(WarningDetail(
+                message=f"Couldn't find line {key}'s price ({_money(total)}) in the document",
+                sources=boxes,
+            ))
         out.append(
             ExtractedLine(
                 key=key,
@@ -718,7 +801,10 @@ def to_extracted(
     ]
 
     for charge in q.unpriced_charges:
-        warnings.append(f"Quote mentions a charge without an amount: {charge}")
+        warnings.append(WarningDetail(
+            message=f"Quote mentions a charge without an amount: {charge.text}",
+            sources=charge_boxes(charge.text, charge.source_rows, layout),
+        ))
 
     keys_active = active_keys(out)
     computed = _round(sum(ln.total_price for ln in out if ln.key in keys_active))
@@ -728,7 +814,13 @@ def to_extracted(
         q.grand_total if q.grand_total is not None else _round(computed + (tax or 0))
     )
 
-    warnings.extend(reconcile(out, q.net_total, tax, q.grand_total))
+    tsr = q.total_source_rows
+    total_sources = {
+        "net": total_boxes(q.net_total, tsr.net, layout),
+        "tax": total_boxes(tax, tsr.tax, layout),
+        "grand": total_boxes(q.grand_total, tsr.grand, layout),
+    }
+    warnings.extend(reconcile(out, q.net_total, tax, q.grand_total, total_sources))
 
     # Same rule as on save: the primary group is the largest active spend,
     # falling back to the model's quote-level choice.
@@ -773,12 +865,16 @@ def _missing_fields(data: ExtractedVendorData) -> list[str]:
     return missing
 
 
-def _finish(data: ExtractedVendorData, warnings: list[str]) -> ExtractionResponse:
+def _finish(
+    data: ExtractedVendorData, details: list[WarningDetail]
+) -> ExtractionResponse:
+    # `warnings` is derived from the details so the two can never diverge.
     return ExtractionResponse(
         success=True,
         data=data,
         missing_fields=_missing_fields(data) or None,
-        warnings=warnings or None,
+        warnings=[d.message for d in details] or None,
+        warning_details=details or None,
     )
 
 
@@ -847,5 +943,5 @@ def extract_from_pdf(
     if quote is None:
         return _fail("Empty response from AI")
 
-    data, warnings = to_extracted(quote, layout, groups)
-    return _finish(data, warnings)
+    data, details = to_extracted(quote, layout, groups)
+    return _finish(data, details)

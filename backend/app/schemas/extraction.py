@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from app.services.pdf_layout import Box
 
@@ -69,6 +69,24 @@ class ExtractedVendorData(BaseModel):
     )
 
 
+class WarningDetail(BaseModel):
+    """A warning plus the source boxes it points at (empty = no known location)."""
+
+    message: str
+    sources: list[Box] = Field(default_factory=list)
+
+
+def _coerce_warnings(value: Any) -> Any:
+    """Plain strings (older clients / stored rows) become {message, sources: []}."""
+    if value is None:
+        return None
+    return [{"message": v, "sources": []} if isinstance(v, str) else v for v in value]
+
+
+# Accepts strings or {message, sources} objects; always holds WarningDetail.
+WarningList = Annotated[list[WarningDetail], BeforeValidator(_coerce_warnings)]
+
+
 class ExtractionResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -77,6 +95,10 @@ class ExtractionResponse(BaseModel):
     error: str | None = None
     missing_fields: list[str] | None = Field(default=None, alias="missingFields")
     warnings: list[str] | None = None
+    # Same messages and order as `warnings`, each with its source boxes.
+    warning_details: list[WarningDetail] | None = Field(
+        default=None, alias="warningDetails"
+    )
 
 
 # --- Internal LLM output types (strict structured output: every field required,
@@ -111,6 +133,20 @@ class LlmFieldSources(BaseModel):
     valid_until: list[str]
 
 
+class LlmUnpricedCharge(BaseModel):
+    text: str
+    # Rows where the charge is printed.
+    source_rows: list[str]
+
+
+class LlmTotalSources(BaseModel):
+    """Row ids where the net, tax and grand totals are printed (empty if absent)."""
+
+    net: list[str]
+    tax: list[str]
+    grand: list[str]
+
+
 class LlmQuote(BaseModel):
     title: str | None
     vendor_name: str | None
@@ -123,6 +159,7 @@ class LlmQuote(BaseModel):
     net_total: float | None
     tax_total: float | None
     grand_total: float | None
-    unpriced_charges: list[str]
+    unpriced_charges: list[LlmUnpricedCharge]
+    total_source_rows: LlmTotalSources
     commodity_group_id: int | None
     field_source_rows: LlmFieldSources

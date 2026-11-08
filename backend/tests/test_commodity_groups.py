@@ -18,7 +18,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import CommodityGroup, Organization
-from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote
+from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote, LlmTotalSources
 from app.seed import DEMO_PASSWORD, seed
 from app.services import extraction as svc
 from app.services.pdf_layout import Box, PdfLayout, PdfRow
@@ -341,6 +341,7 @@ def _quote(lines, **kw):
     base = dict(title="Q", vendor_name="V", vendor_tax_id=None, department=None,
                 quote_number=None, valid_until=None, currency="USD", lines=lines,
                 net_total=None, tax_total=None, grand_total=None, unpriced_charges=[],
+                total_source_rows=LlmTotalSources(net=[], tax=[], grand=[]),
                 commodity_group_id=None, field_source_rows=fsr)
     base.update(kw)
     return LlmQuote(**base)

@@ -163,7 +163,7 @@ def test_create_round_trips_rich_lines(client, auth):
     assert body["currency"] == "EUR"
     assert body["taxTotal"] == 19.0
     assert body["netTotal"] == 360.0
-    assert body["extractionWarnings"] == ["check this"]
+    assert body["extractionWarnings"] == [{"message": "check this", "sources": []}]
     assert body["total_cost"] == 379.0
     assert "quote_number" not in body and "tax_total" not in body
     first, second = body["order_lines"]
@@ -441,3 +441,42 @@ def test_field_sources_round_trip_and_header_only_keeps(client, auth):
 def test_field_sources_absent_is_null(client, auth):
     body = _make(client, auth)
     assert body["fieldSources"] is None
+
+
+def test_extraction_warning_objects_round_trip(client, auth):
+    warns = [
+        {"message": "Quote mentions a charge without an amount: Fuel surcharge",
+         "sources": [BOX]},
+        "plain string",
+    ]
+    r = create(client, auth, [line("1", unitPrice=10.0, amount=1)], extractionWarnings=warns)
+    assert r.status_code == 201, r.text
+    expected = [warns[0], {"message": "plain string", "sources": []}]
+    body = r.json()
+    assert body["extractionWarnings"] == expected
+    assert client.get(f"/requests/{body['id']}", headers=auth).json()["extractionWarnings"] == expected
+
+
+def test_header_only_put_keeps_warnings(client, auth):
+    warns = [{"message": "w", "sources": [BOX]}]
+    body = create(client, auth, [line("1", unitPrice=10.0, amount=1)],
+                  extractionWarnings=warns).json()
+    lines = [line("1", unitPrice=10.0, amount=1)]
+    r = put(client, auth, body["id"], lines, vendorName="V2")
+    assert r.status_code == 200, r.text
+    assert r.json()["extractionWarnings"] == warns
+    r2 = put(client, auth, body["id"], lines, extractionWarnings=["s"])
+    assert r2.json()["extractionWarnings"] == [{"message": "s", "sources": []}]
+
+
+def test_legacy_string_warnings_in_db_load_as_objects(client, auth):
+    from app.models import ProcurementRequest
+
+    body = create(client, auth, [line("1", unitPrice=10.0, amount=1)]).json()
+    with Session() as s:
+        row = s.get(ProcurementRequest, uuid.UUID(body["id"]))
+        row.extraction_warnings = ["old string", {"message": "new", "sources": [BOX]}]
+        s.commit()
+    got = client.get(f"/requests/{body['id']}", headers=auth).json()
+    assert got["extractionWarnings"] == [
+        {"message": "old string", "sources": []}, {"message": "new", "sources": [BOX]}]
