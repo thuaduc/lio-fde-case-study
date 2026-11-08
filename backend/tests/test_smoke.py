@@ -216,7 +216,13 @@ def test_full_user_journey():
     )
     assert r.status_code == 422
 
-    # --- full update replaces order lines ---
+    # --- full update replaces order lines (only allowed while open) ---
+    r = client.patch(
+        f"/requests/{request_id}/status",
+        json={"status": "open"},
+        headers=_auth(owner_token),
+    )
+    assert r.status_code == 200
     update = {
         "requestorName": "Olive Owner",
         "title": "Software Licenses (updated)",

@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.deps import get_current_membership, require_buyer_or_admin
 from app.db.session import get_db
 from app.models import (
+    Article,
     CommodityGroup,
     OrderLine,
     Organization,
@@ -18,12 +20,15 @@ from app.models import (
 )
 from app.schemas.requests import (
     ApprovalDecision,
+    OrderLineIn,
     RequestActivityOut,
     RequestCreate,
     RequestOut,
     RequestUpdate,
     StatusUpdate,
 )
+
+from app.services.line_links import ADJUSTMENTS, active_keys
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -39,6 +44,10 @@ _FIELD_LABELS = {
     "total_cost": "total cost",
     "department": "department",
     "order_lines": "order lines",
+    "quote_number": "quote number",
+    "valid_until": "valid until",
+    "currency": "currency",
+    "tax_total": "tax total",
 }
 
 
@@ -111,20 +120,182 @@ def _log_activity(
     )
 
 
+def _json_sources(sources) -> str:
+    return json.dumps(
+        [b.model_dump() if hasattr(b, "model_dump") else b for b in sources or []],
+        sort_keys=True,
+    )
+
+
+def _num(value, places: int):
+    return None if value is None else round(float(value), places)
+
+
 def _order_lines_signature(lines) -> list[tuple]:
+    """Comparable view of lines; works for stored OrderLine rows and prepared
+    OrderLineIn payloads (field names are mapped by the caller)."""
     return [
         (
             line.position_description,
-            float(line.unit_price),
-            float(line.amount),
+            _num(line.unit_price, 2),
+            _num(line.amount, 4),
             line.unit,
-            float(line.total_price),
+            _num(line.total_price, 2),
+            line.key,
+            line.parent_key,
+            line.kind,
+            line.position,
+            line.vendor_item_number,
+            _num(line.list_unit_price, 2),
+            _num(line.adjustment_percent, 3),
+            _json_sources(line.sources),
+            line.source_text,
+            str(line.article_id) if line.article_id else None,
         )
         for line in lines
     ]
 
 
-def _changed_fields(request: ProcurementRequest, payload: RequestUpdate) -> list[str]:
+class _StoredLine:
+    """Adapter exposing a stored OrderLine under the OrderLineIn field names."""
+
+    def __init__(self, row: OrderLine):
+        self.__dict__.update(
+            position_description=row.position_description,
+            unit_price=row.unit_price,
+            amount=row.amount,
+            unit=row.unit,
+            total_price=row.total_price,
+            key=row.line_key,
+            parent_key=row.parent_key,
+            kind=row.line_type,
+            position=row.position,
+            vendor_item_number=row.vendor_item_number,
+            list_unit_price=row.list_unit_price,
+            adjustment_percent=row.adjustment_percent,
+            sources=row.sources,
+            source_text=row.source_text,
+            article_id=row.article_id,
+        )
+
+
+def _stored_signature(request: ProcurementRequest) -> list[tuple]:
+    rows = sorted(request.order_lines, key=lambda line: line.line_order)
+    return _order_lines_signature([_StoredLine(r) for r in rows])
+
+
+def _unprocessable(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+
+
+def _validate_links(lines: list[OrderLineIn]) -> None:
+    """Check keys and parent links (shared by create and update)."""
+    by_key: dict[str, OrderLineIn] = {}
+    for line in lines:
+        if line.key in by_key:
+            raise _unprocessable(f"Duplicate line key: {line.key!r}")
+        by_key[line.key] = line
+    for line in lines:
+        if line.parent_key is None:
+            continue
+        label = f"Line {line.key!r} ({line.kind})"
+        parent = by_key.get(line.parent_key)
+        if parent is None:
+            raise _unprocessable(
+                f"{label} references unknown parent {line.parent_key!r}"
+            )
+        if line.kind == "item":
+            raise _unprocessable(f"{label} cannot have a parent")
+        if line.kind in ("alternative", "optional") and parent.kind != "item":
+            raise _unprocessable(
+                f"{label} must belong to an item, but parent {parent.key!r} is a {parent.kind}"
+            )
+        if line.kind in ADJUSTMENTS and parent.kind in ADJUSTMENTS:
+            raise _unprocessable(
+                f"{label} cannot be attached to another adjustment ({parent.key!r})"
+            )
+
+
+def _prepare_lines(lines: list[OrderLineIn]) -> list[OrderLineIn]:
+    """Fill defaults, apply the server-side line math and validate links.
+
+    - missing key -> str(line_order) (same convention as the 0007 backfill)
+    - list price + adjustment % -> effective unit price
+    - total = round(amount * unit price, 2); discounts are always negative
+    """
+    prepared: list[OrderLineIn] = []
+    for index, line in enumerate(lines):
+        unit_price = line.unit_price
+        if line.list_unit_price is not None and line.adjustment_percent is not None:
+            unit_price = round(
+                line.list_unit_price * (1 + line.adjustment_percent / 100), 2
+            )
+        total_price = round(line.amount * unit_price, 2)
+        if line.kind == "discount" and total_price > 0:
+            total_price = -total_price
+            unit_price = -unit_price
+        prepared.append(
+            line.model_copy(
+                update={
+                    "key": line.key or str(index + 1),
+                    "unit_price": unit_price,
+                    "total_price": total_price,
+                }
+            )
+        )
+    _validate_links(prepared)
+    return prepared
+
+
+def compute_totals(
+    lines: list[OrderLineIn], tax_total: float | None
+) -> tuple[float, float]:
+    """Return (net, grand): net sums the active lines; grand adds the tax."""
+    keys = active_keys(lines)
+    net = round(sum(ln.total_price for ln in lines if ln.key in keys), 2)
+    return net, round(net + (tax_total or 0), 2)
+
+
+def _validate_articles(
+    db: Session, organization_id: uuid.UUID, lines: list[OrderLineIn]
+) -> None:
+    for article_id in {ln.article_id for ln in lines if ln.article_id}:
+        article = db.get(Article, article_id)
+        if article is None or article.organization_id != organization_id:
+            raise _unprocessable(f"Unknown article id: {article_id}")
+
+
+def _build_lines(lines: list[OrderLineIn]) -> list[OrderLine]:
+    return [
+        OrderLine(
+            position_description=line.position_description,
+            unit_price=line.unit_price,
+            amount=line.amount,
+            unit=line.unit,
+            total_price=line.total_price,
+            line_order=index + 1,
+            line_type=line.kind,
+            line_key=line.key,
+            parent_key=line.parent_key,
+            position=line.position,
+            vendor_item_number=line.vendor_item_number,
+            list_unit_price=line.list_unit_price,
+            adjustment_percent=line.adjustment_percent,
+            sources=[b.model_dump() for b in line.sources],
+            source_text=line.source_text,
+            article_id=line.article_id,
+        )
+        for index, line in enumerate(lines)
+    ]
+
+
+def _changed_fields(
+    request: ProcurementRequest,
+    payload: RequestUpdate,
+    lines: list[OrderLineIn],
+    grand_total: float,
+    tax_total: float | None,
+) -> list[str]:
     """Return the field keys whose value differs between the request and payload."""
     changed: list[str] = []
     if request.requestor_name != payload.requestor_name:
@@ -137,15 +308,20 @@ def _changed_fields(request: ProcurementRequest, payload: RequestUpdate) -> list
         changed.append("vat_id")
     if request.commodity_group_id != payload.commodity_group_id:
         changed.append("commodity_group_id")
-    if float(request.total_cost or 0) != float(payload.total_cost or 0):
+    if round(float(request.total_cost or 0), 2) != round(grand_total, 2):
         changed.append("total_cost")
     if (request.department or "") != (payload.department or ""):
         changed.append("department")
-    old_lines = _order_lines_signature(
-        sorted(request.order_lines, key=lambda line: line.line_order)
-    )
-    new_lines = _order_lines_signature(payload.order_lines)
-    if old_lines != new_lines:
+    sent = payload.model_fields_set
+    if "quote_number" in sent and (request.quote_number or "") != (payload.quote_number or ""):
+        changed.append("quote_number")
+    if "valid_until" in sent and request.valid_until != payload.valid_until:
+        changed.append("valid_until")
+    if "currency" in sent and payload.currency and request.currency != payload.currency:
+        changed.append("currency")
+    if _num(request.tax_total, 2) != _num(tax_total, 2):
+        changed.append("tax_total")
+    if _stored_signature(request) != _order_lines_signature(lines):
         changed.append("order_lines")
     return changed
 
@@ -183,6 +359,9 @@ def create_request(
 ) -> RequestOut:
     _validate_commodity_group(db, payload.commodity_group_id)
     _enforce_required_fields(db, membership.organization_id, payload)
+    lines = _prepare_lines(payload.order_lines)
+    _validate_articles(db, membership.organization_id, lines)
+    net_total, grand_total = compute_totals(lines, payload.tax_total)
 
     # Vendor fields are already cleaned up during extraction, so we can persist
     # them directly here.
@@ -193,23 +372,19 @@ def create_request(
         vendor_name=payload.vendor_name,
         vat_id=payload.vat_id,
         commodity_group_id=payload.commodity_group_id,
-        total_cost=payload.total_cost,
+        total_cost=grand_total,
+        net_total=net_total,
+        tax_total=payload.tax_total,
+        quote_number=payload.quote_number,
+        valid_until=payload.valid_until,
+        currency=payload.currency or "USD",
+        extraction_warnings=payload.extraction_warnings,
         department=payload.department,
         organization_id=membership.organization_id,
         created_by=membership.user_id,
         status="open",
     )
-    request.order_lines = [
-        OrderLine(
-            position_description=line.position_description,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            unit=line.unit,
-            total_price=line.total_price,
-            line_order=index + 1,
-        )
-        for index, line in enumerate(payload.order_lines)
-    ]
+    request.order_lines = _build_lines(lines)
     db.add(request)
     db.flush()
     _log_activity(db, request.id, membership.user_id, "created", "Request created")
@@ -230,28 +405,70 @@ def update_request(
     _validate_commodity_group(db, payload.commodity_group_id)
     _enforce_required_fields(db, membership.organization_id, payload)
 
-    changed = _changed_fields(request, payload)
+    lines = _prepare_lines(payload.order_lines)
+    _validate_articles(db, membership.organization_id, lines)
+    sent = payload.model_fields_set
+    # tax_total is never recalculated: keep the stored value unless the client sends one.
+    tax_total = payload.tax_total if "tax_total" in sent else (
+        None if request.tax_total is None else float(request.tax_total)
+    )
+    net_total, grand_total = compute_totals(lines, tax_total)
+
+    # Order lines are only editable while the request is open.
+    lines_changed = _stored_signature(request) != _order_lines_signature(lines)
+    if request.status != "open" and lines_changed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Order lines can only be edited while the request is open.",
+        )
+
+    changed = _changed_fields(request, payload, lines, grand_total, tax_total)
+
+    # A changed grand total invalidates an earlier approval.
+    old_total = round(float(request.total_cost or 0), 2)
+    approval_reset = request.approval_status == "approved" and old_total != round(
+        grand_total, 2
+    )
 
     request.requestor_name = payload.requestor_name
     request.title = payload.title
     request.vendor_name = payload.vendor_name
     request.vat_id = payload.vat_id
     request.commodity_group_id = payload.commodity_group_id
-    request.total_cost = payload.total_cost
+    request.total_cost = grand_total
+    request.net_total = net_total
+    request.tax_total = tax_total
     request.department = payload.department
+    if "quote_number" in sent:
+        request.quote_number = payload.quote_number
+    if "valid_until" in sent:
+        request.valid_until = payload.valid_until
+    if "currency" in sent and payload.currency:
+        request.currency = payload.currency
+    if "extraction_warnings" in sent:
+        request.extraction_warnings = payload.extraction_warnings
 
-    # Replace order lines (same semantics as the original delete-and-insert).
-    request.order_lines = [
-        OrderLine(
-            position_description=line.position_description,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            unit=line.unit,
-            total_price=line.total_price,
-            line_order=index + 1,
+    # Replace order lines only when they changed, so a header-only save keeps
+    # the stored rows (and their ids) untouched.
+    if lines_changed:
+        # Delete the old rows first: inserting the new ones in the same flush
+        # would hit the (request_id, line_key) unique constraint.
+        request.order_lines.clear()
+        db.flush()
+        request.order_lines = _build_lines(lines)
+
+    if approval_reset:
+        request.approval_status = "pending"
+        request.approved_by = None
+        request.approved_at = None
+        _log_activity(
+            db,
+            request.id,
+            membership.user_id,
+            "approval_reset",
+            "Approval reset: total changed",
+            {"from": old_total, "to": grand_total},
         )
-        for index, line in enumerate(payload.order_lines)
-    ]
 
     if changed:
         labels = [_FIELD_LABELS.get(f, f) for f in changed]

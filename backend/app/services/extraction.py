@@ -17,6 +17,7 @@ from app.schemas.extraction import (
     LlmLine,
     LlmQuote,
 )
+from app.services.line_links import active_keys
 from app.services.pdf_layout import (
     Box,
     PdfLayout,
@@ -195,7 +196,6 @@ def extract_vendor_data(pdf_text: str, db: Session) -> ExtractionResponse:
 # ---------------------------------------------------------------------------
 
 SCAN_ERROR = "No text found in this PDF — it may be a scan"
-ACTIVE_EXCLUDED = ("alternative", "optional")
 
 PDF_SYSTEM_PROMPT = (
     "You are a procurement data extraction specialist. You read vendor quotes "
@@ -350,19 +350,6 @@ def resolve_sources(
     return _merge_boxes(rows), source_text, verified
 
 
-def _active_keys(lines: list[ExtractedLine]) -> set[str]:
-    by_key = {ln.key: ln for ln in lines}
-
-    def active(ln: ExtractedLine, seen: frozenset[str] = frozenset()) -> bool:
-        if ln.kind in ACTIVE_EXCLUDED:
-            return False
-        if ln.parent_key is None or ln.key in seen or ln.parent_key not in by_key:
-            return True
-        return active(by_key[ln.parent_key], seen | {ln.key})
-
-    return {ln.key for ln in lines if active(ln)}
-
-
 def reconcile(
     lines: list[ExtractedLine],
     net_total: float | None,
@@ -372,7 +359,7 @@ def reconcile(
     """Warnings where the quote's stated totals disagree with its lines."""
     warnings: list[str] = []
     if net_total is not None:
-        keys = _active_keys(lines)
+        keys = active_keys(lines)
         computed = _round(sum(ln.total_price for ln in lines if ln.key in keys))
         if abs(computed - net_total) > _tol(net_total):
             warnings.append(
@@ -448,7 +435,7 @@ def to_extracted(
     for charge in q.unpriced_charges:
         warnings.append(f"Quote mentions a charge without an amount: {charge}")
 
-    keys_active = _active_keys(out)
+    keys_active = active_keys(out)
     computed = _round(sum(ln.total_price for ln in out if ln.key in keys_active))
     tax = q.tax_total
     net = q.net_total if q.net_total is not None else computed
