@@ -64,6 +64,11 @@ key is only needed for PDF extraction — everything else works without it.
 
 ## Local development
 
+If you previously ran this PR through migration `0011`, its schema is already
+current. After rebuilding the backend image, update only its revision marker:
+`docker compose run --rm --no-deps backend alembic stamp --purge 0007`.
+Fresh databases and databases at `0006` use the normal startup migration.
+
 ```bash
 docker compose up db        # Postgres only
 

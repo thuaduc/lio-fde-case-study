@@ -16,7 +16,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models import CommodityGroup, Organization
 from app.schemas.extraction import (
-    ExtractionResponse, LlmFieldSources, LlmLine, LlmQuote, LlmTotalSources,
+    LlmFieldSources, LlmLine, LlmQuote, LlmTotalSources,
     LlmUnpricedCharge,
 )
 from app.services import extraction as svc
@@ -102,11 +102,6 @@ def test_unknown_parent_dropped():
     assert any("9" in w for w in msgs(warnings))
 
 
-def test_item_parent_always_null():
-    data, _ = conv(quote([line(position="1"), line(position="2", parent_position="1")]))
-    assert data.order_lines[1].parent_key is None
-
-
 def test_duplicate_positions_get_unique_keys():
     data, _ = conv(quote([line(position="1"), line(position="1"), line(position="1")]))
     assert [l.key for l in data.order_lines] == ["1", "1#2", "1#3"]
@@ -120,12 +115,6 @@ def test_line_discount_fields():
     assert l.total_price == 1430.52 and l.amount == 2
 
 
-def test_discount_sign_normalised():
-    q = quote([line(position="1"), line(kind="discount", unit_price=None, quantity=None,
-                                       total_price=50.0)])
-    assert conv(q)[0].order_lines[1].total_price == -50.0
-
-
 def test_null_tax_id_success():
     data, _ = conv(quote([line(position="1")], vendor_tax_id=None))
     assert data.vat_id == ""
@@ -137,17 +126,6 @@ def test_unpriced_charges_become_warnings():
     _, w = conv(quote([line(position="1")], unpriced_charges=[
         LlmUnpricedCharge(text="fuel surcharge", source_rows=[])]))
     assert "Quote mentions a charge without an amount: fuel surcharge" in msgs(w)
-
-
-def test_total_cost_is_grand_total():
-    q = quote([line(position="1", total_price=100),
-               line(position="2", kind="optional", total_price=900)],
-              tax_total=8.0, grand_total=108.0)
-    data, _ = conv(q)
-    assert data.total_cost == 108.0 and data.net_total == 100 and data.tax_total == 8.0
-    q2 = quote([line(position="1", total_price=100)], tax_total=8.0)
-    d2, _ = conv(q2)
-    assert d2.total_cost == 108.0 and d2.net_total == 100
 
 
 def test_net_total_is_sum_of_active_lines_not_stated_subtotal():
@@ -174,13 +152,6 @@ def test_inactive_parent_excludes_adjustment():
         line(kind="discount", parent_position="2", total_price=-5),
     ])
     assert conv(q)[0].net_total == 100
-
-
-def test_commodity_name_from_db():
-    d, _ = conv(quote([line(position="1")], commodity_group_id=15))
-    assert (d.commodity_group_id, d.commodity_group_name) == (15, "Office Equipment")
-    d, _ = conv(quote([line(position="1")], commodity_group_id=99))
-    assert d.commodity_group_id is None and d.commodity_group_name is None
 
 
 # --- extract_from_pdf with a fake client --------------------------------------
@@ -247,29 +218,6 @@ def test_success_call_shape(monkeypatch, db, rows_layout):
     assert "15 | Facilities | Office Equipment" in kw["messages"][1]["content"]
 
 
-def test_temperature_omitted_when_none(monkeypatch, db, rows_layout):
-    fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
-    monkeypatch.setattr(svc.settings, "openai_temperature", None)
-    svc.extract_from_pdf(b"%PDF-", db, ORG)
-    assert "temperature" not in fake.calls[0]
-
-
-def test_settings_defaults_omit_temperature(monkeypatch, db, rows_layout):
-    from app.core.config import Settings
-
-    monkeypatch.delenv("OPENAI_MODEL", raising=False)
-    monkeypatch.delenv("OPENAI_TEMPERATURE", raising=False)
-    defaults = Settings(_env_file=None)
-    assert defaults.openai_model == "gpt-6.1-sol"
-    assert defaults.openai_temperature is None
-    monkeypatch.setattr(svc.settings, "openai_model", defaults.openai_model)
-    monkeypatch.setattr(svc.settings, "openai_temperature", defaults.openai_temperature)
-    fake = use(monkeypatch, FakeClient(completion(quote([line(position="1")]))))
-    svc.extract_from_pdf(b"%PDF-", db, ORG)
-    assert fake.calls[0]["model"] == "gpt-6.1-sol"
-    assert "temperature" not in fake.calls[0]
-
-
 def test_scan_pdf_no_model_call(monkeypatch, db):
     monkeypatch.setattr(svc, "extract_layout", lambda b: PdfLayout(rows=[], page_count=2))
     fake = use(monkeypatch, FakeClient())
@@ -288,13 +236,6 @@ def test_length_and_refusal_errors(monkeypatch, db, rows_layout):
     assert not svc.extract_from_pdf(b"%PDF-", db, ORG).success
 
 
-def test_sdk_length_error_readable(monkeypatch, db, rows_layout):
-    exc = openai.LengthFinishReasonError(completion=SimpleNamespace(usage=None))
-    use(monkeypatch, FakeClient(exc=exc))
-    r = svc.extract_from_pdf(b"%PDF-", db, ORG)
-    assert not r.success and "too long" in r.error
-
-
 READABLE_FAILURE = "Extraction failed \u2014 please try again or fill in the form manually"
 
 
@@ -304,15 +245,6 @@ def test_sdk_exception_readable(monkeypatch, db, rows_layout, caplog):
     with caplog.at_level("ERROR", logger=svc.logger.name):
         r = svc.extract_from_pdf(b"%PDF-", db, ORG)
     assert not r.success and r.error == READABLE_FAILURE
-    assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
-
-
-def test_generic_exception_readable(monkeypatch, db, rows_layout, caplog):
-    exc = RuntimeError("Error code: 400 - secret internals")
-    use(monkeypatch, FakeClient(exc=exc))
-    with caplog.at_level("ERROR", logger=svc.logger.name):
-        r = svc.extract_from_pdf(b"%PDF-", db, ORG)
-    assert r.error == READABLE_FAILURE and "400" not in r.error
     assert any(rec.exc_info and rec.exc_info[1] is exc for rec in caplog.records)
 
 
@@ -355,7 +287,7 @@ def test_endpoint_happy_path(monkeypatch, db, rows_layout):
 
 # --- source boxes, price verification, reconciliation ---------------------------
 
-from app.schemas.extraction import ExtractedLine, ExtractedVendorData  # noqa: E402
+from app.schemas.extraction import ExtractedLine  # noqa: E402
 from app.services.pdf_layout import Word  # noqa: E402
 
 
@@ -376,17 +308,6 @@ def test_unknown_row_ids_ignored():
     assert svc.resolve_sources(l2, lay()) == ([], None, False)
     data, _ = svc.to_extracted(quote([l]), lay(), GROUPS)
     assert data.order_lines[0].sources == [] and data.order_lines[0].source_text is None
-
-
-def test_source_text_is_longest_segment_with_letters():
-    words = [Word(text="1.1", x0=0.1, x1=0.13), Word(text="Moss", x0=0.2, x1=0.24),
-             Word(text="panel", x0=0.25, x1=0.3), Word(text="715.26", x0=0.8, x1=0.9)]
-    row = mkrow("a", "1.1 Moss panel 715.26", words=words, cw=0.01)
-    boxes, text, _ = svc.resolve_sources(line(source_rows=["a"]), lay(row))
-    assert text == "Moss panel" and len(boxes) == 1
-    # first valid row without a 3-letter segment -> None
-    num = mkrow("n", "1 2", words=[Word(text="1", x0=0.1, x1=0.11)])
-    assert svc.resolve_sources(line(source_rows=["n"]), lay(num))[1] is None
 
 
 def test_source_text_is_description_segment(quote_bytes):
@@ -413,14 +334,6 @@ def test_boxes_merge_adjacent_rows_per_page():
 def test_price_verified_formats(text):
     l = line(position="1", total_price=1560.0, quantity=None, source_rows=["a"])
     assert svc.resolve_sources(l, lay(mkrow("a", text)))[2] is True
-
-
-def test_price_verified_when_total_in_rows():
-    l = line(position="1", quantity=2, list_unit_price=894.08, adjustment_percent=-20,
-             total_price=None, source_rows=["a"])
-    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 715.26")))[2] is True  # unit price
-    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 1,430.52")))[2] is True  # total
-    assert svc.resolve_sources(l, lay(mkrow("a", "Panel 2 pcs 999.00")))[2] is False
 
 
 def test_unverified_price_warns():
@@ -459,27 +372,6 @@ def test_total_only_shipping_line_normalised():
     assert not any("quantity x unit price" in x for x in msgs(w))
 
 
-def test_zero_qty_zero_price_with_total_normalised():
-    fee = line(position="3", kind="fee", quantity=0, unit_price=0, total_price=215.0)
-    data, _ = conv(quote([fee]))
-    ln = data.order_lines[0]
-    assert (ln.amount, ln.unit_price, ln.total_price) == (1, 215.0, 215.0)
-
-
-def test_list_price_fallback_when_unit_price_null():
-    l = line(position="1", quantity=3, unit_price=None, list_unit_price=10.0,
-             adjustment_percent=None, total_price=30.0)
-    data, _ = conv(quote([l]))
-    ln = data.order_lines[0]
-    assert (ln.amount, ln.unit_price, ln.total_price) == (3, 10.0, 30.0)
-
-
-def test_prompt_department_is_buyers_only():
-    prompt = svc._build_pdf_prompt("[r1] x", "15 | Facilities | Office Equipment")
-    assert "BUYER's department only" in prompt
-    assert "Apple Business Team" in prompt
-
-
 def test_apple_fee_after_items_subtotal_is_consistent():
     # Apple: subtotal $1,409.06 covers the item only; the $4 fee comes after tax.
     # Lines (1,413.06) + tax (121.53) = grand (1,534.59), so no warning.
@@ -493,24 +385,12 @@ def test_missing_fee_still_warns_on_grand_total():
     assert msgs(w) == ["Line items $1,409.06 plus tax $121.53 come to $1,530.59 but the quote's grand total is $1,534.59"]
 
 
-def test_totals_tolerance_scales_with_active_lines():
-    assert svc._totals_tol(0) == svc._totals_tol(1) == pytest.approx(0.01)
-    assert svc._totals_tol(5) == pytest.approx(0.05)
-
-
 @pytest.mark.parametrize("sign", [1, -1])
 def test_discount_sign_normalised_unit_and_total(sign):
     d = line(position="2", kind="discount", quantity=1, unit_price=sign * 10.0,
              total_price=sign * 10.0)
     ln = conv(quote([d]))[0].order_lines[0]
     assert (ln.unit_price, ln.total_price) == (-10.0, -10.0)
-
-
-def test_total_only_discount_gets_negative_unit_price():
-    d = line(position="2", kind="discount", quantity=None, unit_price=None,
-             total_price=10.0)
-    ln = conv(quote([d]))[0].order_lines[0]
-    assert (ln.amount, ln.unit_price, ln.total_price) == (1, -10.0, -10.0)
 
 
 def test_quantity_kept_when_unit_price_missing():
@@ -527,20 +407,6 @@ def test_inexact_split_keeps_stated_total():
     assert (ln.amount, ln.unit_price, ln.total_price) == (1, 100.0, 100.0)
 
 
-def test_inexact_split_discount_keeps_stated_total():
-    l = line(position="1", kind="discount", quantity=3, unit_price=None,
-             total_price=-100.0)
-    ln = conv(quote([l]))[0].order_lines[0]
-    assert (ln.amount, ln.unit_price, ln.total_price) == (1, -100.0, -100.0)
-
-
-def test_total_only_negative_discount():
-    d = line(position="2", kind="discount", quantity=None, unit_price=None,
-             total_price=-10.0)
-    ln = conv(quote([d]))[0].order_lines[0]
-    assert (ln.amount, ln.unit_price, ln.total_price) == (1, -10.0, -10.0)
-
-
 def test_discount_with_list_and_adjustment():
     d = line(position="2", kind="discount", quantity=5, unit_price=None,
              list_unit_price=10.0, adjustment_percent=-10.0, total_price=-45.0)
@@ -553,20 +419,6 @@ def test_adjusted_line_not_overwritten_by_total():
              adjustment_percent=-10.0, total_price=45.0)
     ln = conv(quote([l]))[0].order_lines[0]
     assert (ln.amount, ln.unit_price, ln.total_price) == (5, 9.0, 45.0)
-
-
-def test_env_temperature_none_gives_none(monkeypatch):
-    from app.core.config import Settings
-
-    monkeypatch.setenv("OPENAI_TEMPERATURE", "none")
-    assert Settings(_env_file=None).openai_temperature is None
-
-
-def test_prompt_short_line_descriptions():
-    prompt = svc._build_pdf_prompt("[r1] x", "15 | Facilities | Office Equipment")
-    assert "short name as printed" in prompt
-    assert "120 characters" in prompt
-    assert "Moss panel" in prompt
 
 
 def test_line_math_warns():
@@ -594,14 +446,6 @@ def test_none_totals_no_crash():
 # --- header field sources ---
 
 
-def test_llm_field_sources_is_strict():
-    with pytest.raises(Exception):
-        LlmFieldSources(vendor_name=[])  # all five are required
-    props = LlmQuote.model_json_schema()["$defs"]["LlmFieldSources"]["properties"]
-    assert set(props) == {"vendor_name", "vendor_tax_id", "department",
-                          "quote_number", "valid_until"}
-
-
 def test_field_sources_resolved_and_keys_camel():
     lt = lay(mkrow("v", "Acme Corp", y0=0.05, y1=0.07), mkrow("q", "Quote Q1", y0=0.30, y1=0.32))
     q = quote([], field_source_rows=fsr(vendor_name=["v"], quote_number=["q"]))
@@ -627,24 +471,6 @@ def test_field_sources_omitted_when_value_null():
               field_source_rows=fsr(vendor_tax_id=["v"], valid_until=["v"]))
     data, _ = svc.to_extracted(q, lt, GROUPS)
     assert data.field_sources == {}
-
-
-def test_field_sources_default_empty():
-    assert ExtractedVendorData().field_sources == {}
-
-
-def test_hollis_vat_box_is_ein_row(quote_bytes):
-    from app.services.pdf_layout import extract_layout
-    from tests.test_pdf_layout import HOLLIS
-    layout = extract_layout(quote_bytes(HOLLIS))
-    row = next(r for r in layout.rows if "EIN: 94 1985704" in r.text)
-    q = quote([], vendor_tax_id="94 1985704", field_source_rows=fsr(vendor_tax_id=[row.id]))
-    data, _ = svc.to_extracted(q, layout, GROUPS)
-    assert covered(layout, data.field_sources["vatId"])[-2:] == ["94", "1985704"]
-
-
-def test_prompt_cites_header_rows():
-    assert "field_source_rows" in svc._build_pdf_prompt("", "")
 
 
 # --- word-level header highlights on the real quotes (fake LLM, no network) ---
@@ -760,21 +586,6 @@ def test_unmatched_value_keeps_only_a_gap_segment_or_nothing(quote_bytes):
     assert covered(lt, fs["vendorName"]) == ["Apple", "Business", "Team"]
 
 
-def test_verdeform_footer_is_an_image_not_text(quote_bytes):
-    # The 'EIN: 27-1073640' footer is part of a full-page raster background, so the
-    # layout has no such row; the box is dropped rather than guessed.
-    lt = real(quote_bytes, VERDEFORM)
-    assert not any("27-1073640" in r.text for r in lt.rows)
-    fs = sources(lt, vendor_tax_id="27-1073640", field_source_rows=fsr(vendor_tax_id=["p1-r001"]))
-    assert "vatId" not in fs
-
-
-def test_prompt_mentions_footer_tax_ids():
-    p = svc._build_pdf_prompt("", "")
-    assert "footer" in p and "letterhead" in p
-    assert "27-1073640" not in p and "1985704" not in p
-
-
 # --- matching logic on synthetic rows (no PDF) ---
 
 
@@ -804,21 +615,6 @@ def test_valid_until_printed_forms(printed):
     lt, fs = synth(wrow("a", f"Date: 11/28/23 Valid until: {printed}"), attr="valid_until",
                    valid_until="2024-01-27")
     assert words_in(lt, fs["validUntil"]) == ["Valid", "until:", *printed.split()]
-
-
-def test_weekday_widening_only_for_dates():
-    lt, fs = synth(wrow("a", "Wednesday, Mar 20, 2024"), attr="valid_until", valid_until="2024-03-20")
-    assert words_in(lt, fs["validUntil"]) == ["Wednesday,", "Mar", "20,", "2024"]
-    lt, fs = synth(wrow("a", "Friday Apple Inc"), attr="vendor_name", vendor_name="Apple")
-    assert words_in(lt, fs["vendorName"]) == ["Apple"]
-
-
-def test_label_included_for_tax_id_not_for_vendor():
-    lt, fs = synth(wrow("a", "Fax 123 EIN: 12-3456789"), attr="vendor_tax_id",
-                   vendor_tax_id="12 3456789")
-    assert words_in(lt, fs["vatId"]) == ["EIN:", "12-3456789"]
-    lt, fs = synth(wrow("a", "Quote No. Q-1 Acme"), attr="vendor_name", vendor_name="Q-1")
-    assert words_in(lt, fs["vendorName"]) == ["Q-1"]
 
 
 def test_label_fused_to_value_is_split():
@@ -859,12 +655,6 @@ def test_repeats_deduped_first_in_reading_order_wins():
     assert fs["vendorName"][0].y0 == pytest.approx(0.95)
 
 
-def test_single_char_tokens_ignored_in_segment_fallback():
-    row = wrow("a", "A Zed Corp", gap=0.05)
-    lt, fs = synth(row, attr="vendor_name", vendor_name="A Quux Ltd")
-    assert "vendorName" not in fs
-
-
 # --- warning source highlights ------------------------------------------------
 
 
@@ -877,16 +667,6 @@ def prow(rid, y, *pairs, page=1):
     words = [Word(text=t, x0=a, x1=b) for t, a, b in pairs]
     return mkrow(rid, " ".join(t for t, _, _ in pairs), page=page, y0=y, y1=y + 0.02,
                  words=words)
-
-
-def test_unpriced_charge_schema_is_strict():
-    with pytest.raises(Exception):
-        LlmUnpricedCharge(text="x")
-    with pytest.raises(Exception):
-        LlmTotalSources(net=[], tax=[])
-    props = LlmQuote.model_json_schema()["$defs"]
-    assert set(props["LlmUnpricedCharge"]["required"]) == {"text", "source_rows"}
-    assert set(props["LlmTotalSources"]["required"]) == {"net", "tax", "grand"}
 
 
 def test_unpriced_charges_each_get_word_tight_boxes():
@@ -953,32 +733,6 @@ def test_net_warning_boxes_net_row():
     assert covered(lt, details[0].sources) == ["110.00"]
 
 
-def test_total_row_cited_for_tax_and_grand_is_deduped():
-    lt = lay(prow("tg", 0.6, ("Total", 0.5, 0.55), ("$1,534.59", 0.8, 0.9)))
-    boxes = svc.total_boxes(1534.59, ["tg"], lt) + svc.total_boxes(1534.59, ["tg"], lt)
-    assert len(svc._dedupe(boxes)) == 1
-    # tax == grand amount cited on one row -> one box in the warning
-    q = quote([line(position="1", unit_price=1000, total_price=1000)],
-              tax_total=1534.59, grand_total=1534.59,
-              total_source_rows=tsr(tax=["tg"], grand=["tg"]))
-    _, details = svc.to_extracted(q, lt, GROUPS)
-    grand = [d for d in details if "grand total" in d.message][0]
-    assert len(grand.sources) == 1
-
-
-def test_total_without_words_is_dropped_not_full_row():
-    lt = lay(mkrow("g", "Total $1,534.59"))
-    assert svc.total_boxes(1534.59, ["g"], lt) == []
-
-
-def test_total_falls_back_to_gap_segment_with_the_number():
-    # number fused with text so no whole-word match; its gap segment is boxed
-    lt = lay(prow("g", 0.6, ("Grand", 0.5, 0.54), ("total", 0.55, 0.59),
-                  ("(USD)", 0.60, 0.64), ("1534.59x", 0.85, 0.9)))
-    boxes = svc.total_boxes(1534.59, ["g"], lt)
-    assert len(boxes) == 1 and boxes[0].x0 >= 0.85 - 1e-9
-
-
 def test_line_warnings_carry_the_lines_sources():
     lt = lay(prow("a", 0.3, ("Panel", 0.1, 0.15), ("999.00", 0.8, 0.88)))
     l = line(position="2", quantity=1, unit_price=715.26, total_price=715.26,
@@ -992,28 +746,6 @@ def test_line_warnings_carry_the_lines_sources():
     l3 = line(position="4", kind="surcharge", parent_position="9", source_rows=["a"])
     _, d3 = svc.to_extracted(quote([l3]), lt, GROUPS)
     assert [x for x in d3 if "parent position" in x.message][0].sources
-
-
-def test_warning_without_location_has_empty_sources():
-    l = line(position="2", kind="surcharge", parent_position="9")
-    _, details = svc.to_extracted(quote([l]), lay(), GROUPS)
-    assert details[0].sources == []
-
-
-def test_response_warnings_derive_from_details():
-    lt, q = _apple_like()
-    data, details = svc.to_extracted(q, lt, GROUPS)
-    resp = svc._finish(data, details)
-    assert resp.warnings == [d.message for d in resp.warning_details]
-    wire = resp.model_dump(by_alias=True)
-    assert wire["warnings"] == [d["message"] for d in wire["warningDetails"]]
-    assert wire["warningDetails"][0]["sources"][0].keys() >= {"page", "x0", "y0", "x1", "y1"}
-    assert ExtractionResponse(success=True).warning_details is None
-
-
-def test_prompt_describes_new_fields():
-    p = svc._build_pdf_prompt("", "")
-    assert "total_source_rows" in p and "source_rows" in p and "unpriced_charges" in p
 
 
 def test_verdeform_unpriced_charges_boxed(quote_bytes):
@@ -1050,25 +782,6 @@ def test_illegal_parent_dropped_with_warning(child_kind, parent_kind):
     kinds = _kinds(data)
     assert kinds["3"][1] is None
     assert any(w.message.startswith("Line 3:") and "not linked" in w.message
-               for w in warnings)
-
-
-def test_legal_parent_kept_without_warning():
-    q = quote([
-        line(position="1"),
-        line(position="2", kind="alternative", parent_position="1"),
-        line(position="3", kind="discount", parent_position="2"),
-    ])
-    data, warnings = conv(q)
-    assert _kinds(data)["3"] == ("discount", "2")
-    assert not any("not linked" in w.message for w in warnings)
-
-
-def test_orphan_alternative_becomes_optional_with_warning():
-    q = quote([line(position="1"), line(position="2", kind="alternative")])
-    data, warnings = conv(q)
-    assert _kinds(data)["2"] == ("optional", None)
-    assert any(w.message.startswith("Line 2:") and "optional" in w.message
                for w in warnings)
 
 

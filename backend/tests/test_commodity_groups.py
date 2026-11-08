@@ -468,31 +468,33 @@ def test_prompt_contains_org_descriptions_only(client, acme, bmw, monkeypatch):
 # --- migration ----------------------------------------------------------------
 
 
-def _load_0010():
+def _load_migration():
     path = (Path(__file__).resolve().parent.parent
-            / "alembic/versions/0010_org_commodity_groups.py")
-    spec = importlib.util.spec_from_file_location("mig0010", path)
+            / "alembic/versions/0007_acme_quote_review.py")
+    spec = importlib.util.spec_from_file_location("mig0007", path)
     mig = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mig)
     return mig
 
 
 def test_migration_repoints_requests():
-    """Run the real 0010 upgrade()/downgrade() on a pre-0010 SQLite schema."""
-    mig = _load_0010()
-    assert (mig.revision, mig.down_revision) == ("0010", "0009")
+    """Upgrade populated legacy tables, check backfills, then restore the old schema."""
+    mig = _load_migration()
+    assert (mig.revision, mig.down_revision) == ("0007", "0006")
 
     eng = create_engine("sqlite://")
     with eng.begin() as conn:
         for ddl in (
             "CREATE TABLE organizations (id CHAR(32) PRIMARY KEY)",
+            "CREATE TABLE users (id CHAR(32) PRIMARY KEY)",
+            "CREATE TABLE articles (id CHAR(32) PRIMARY KEY)",
             "CREATE TABLE commodity_groups (id INTEGER PRIMARY KEY, category TEXT NOT NULL,"
             " name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL)",
             "CREATE TABLE procurement_requests (id CHAR(32) PRIMARY KEY,"
             " organization_id CHAR(32), commodity_group_id INTEGER"
             " REFERENCES commodity_groups(id))",
             "CREATE TABLE order_lines (id CHAR(32) PRIMARY KEY, request_id CHAR(32) NOT NULL,"
-            " line_key TEXT NOT NULL)",
+            " line_order INTEGER NOT NULL)",
             "INSERT INTO organizations VALUES ('orga'), ('orgb')",
             "INSERT INTO commodity_groups (id, category, name) VALUES"
             " (1, 'IT', 'Hardware'), (2, 'IT', 'Software'),"
@@ -500,12 +502,18 @@ def test_migration_repoints_requests():
             # r1: base template; r2: variant -> base copy; r3: no org; r4: no base match
             "INSERT INTO procurement_requests VALUES ('r1','orga',2), ('r2','orgb',3),"
             " ('r3',NULL,1), ('r4','orga',4)",
-            "INSERT INTO order_lines VALUES ('l1','r1','1'), ('l2','r2','1'),"
-            " ('l3','r3','1')",
+            "INSERT INTO order_lines VALUES ('l1','r1',1), ('l2','r2',1),"
+            " ('l3','r3',1)",
         ):
             conn.execute(sa.text(ddl))
         with Operations.context(MigrationContext.configure(conn)):
             mig.upgrade()
+
+        assert conn.execute(sa.text(
+            "SELECT line_key, line_type, parent_key FROM order_lines"
+        )).all() == [("1", "item", None)] * 3
+        assert {"request_drafts", "article_embeddings"} <= set(sa.inspect(conn).get_table_names())
+        assert "field_sources" in {c["name"] for c in sa.inspect(conn).get_columns("procurement_requests")}
 
         copies = conn.execute(sa.text(
             "SELECT organization_id, category, name, id FROM commodity_groups"
@@ -538,7 +546,12 @@ def test_migration_repoints_requests():
         cols = {c["name"] for c in sa.inspect(conn).get_columns("commodity_groups")}
         assert cols == {"id", "category", "name", "created_at"}
         cols = {c["name"] for c in sa.inspect(conn).get_columns("order_lines")}
-        assert "commodity_group_id" not in cols
+        assert cols == {"id", "request_id", "line_order"}
+        assert "request_drafts" not in sa.inspect(conn).get_table_names()
+        assert "article_embeddings" not in sa.inspect(conn).get_table_names()
+        assert {c["name"] for c in sa.inspect(conn).get_columns("procurement_requests")} == {
+            "id", "organization_id", "commodity_group_id",
+        }
 
 
 # --- review fixes ---------------------------------------------------------------

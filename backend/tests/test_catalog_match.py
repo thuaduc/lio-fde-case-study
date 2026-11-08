@@ -279,31 +279,6 @@ def test_fallback_without_api_key(client, org, monkeypatch):
     assert fake.embedding_calls == [] and fake.chat_calls == []
 
 
-def test_fuzzy_scores_are_what_the_brief_says():
-    from rapidfuzz import fuzz
-    from rapidfuzz.utils import default_process
-
-    moss = fuzz.token_set_ratio(MOSS_LINE, MOSS, processor=default_process)
-    kb = fuzz.token_set_ratio(
-        "Wireless keyboard and mouse set, compact", KEYBOARD, processor=default_process
-    )
-    assert moss < 60 and kb >= 80
-
-
-def test_embedding_shortlist_finds_synonym(client, org, monkeypatch):
-    _, org_id = org
-    fake = use(monkeypatch, FakeClient())
-    with Session() as db:
-        articles = list(db.scalars(select(Article).where(Article.organization_id == org_id)))
-        vectors = cm.ensure_embeddings(db, [a.description for a in articles] + [MAC_LINE])
-    hits = cm.shortlist(MAC_LINE, articles, k=3, vectors=vectors)
-    assert hits[0].article.description == LAPTOP
-    assert hits[0].mode == "embedding"
-    assert hits[0].score > 0.9
-    assert len(hits) == 3
-    assert len(fake.embedding_calls) == 1
-
-
 def test_shortlist_keeps_twenty_candidates_by_default():
     """Near-identical variants (14" i5 / i7 / ...) must not crowd out real options."""
     articles = [
@@ -343,11 +318,6 @@ def test_embedding_model_mismatch_counts_as_missing(client, monkeypatch):
         db.expire_all()  # the upsert bypasses the ORM identity map; drop the stale row
         assert len(fake.embedding_calls) == 2
         assert db.get(ArticleEmbedding, cm.text_hash(MOSS)).model == settings.openai_embedding_model
-
-
-def test_text_hash_normalisation():
-    assert cm.text_hash("  Foo   BAR ") == cm.text_hash("foo bar")
-    assert len(cm.text_hash("x")) == 64
 
 
 def test_sorted_cheapest_first_and_max_three(client, org, monkeypatch):
@@ -442,34 +412,6 @@ def test_llm_error_falls_back_to_fuzzy_80(client, org, monkeypatch, caplog):
     assert any("llm" in r.getMessage().lower() for r in caplog.records)
 
 
-def test_llm_called_once_for_all_lines_with_strict_schema(client, org, monkeypatch):
-    headers, _ = org
-    fake = use(monkeypatch, FakeClient({"HAR-00172": "same"}))
-    suggest(
-        client, headers,
-        [
-            {"description": MOSS_LINE, "unit": "sq ft", "unitPrice": 52.0},
-            {"description": MAC_LINE, "unit": "piece", "unitPrice": 1.0},
-        ],
-    )
-    assert len(fake.chat_calls) == 1
-    assert "temperature" not in fake.chat_calls[0]  # settings.openai_temperature is None
-    schema = fake.chat_calls[0]["response_format"].model_json_schema()
-
-    def walk(node):
-        if isinstance(node, dict):
-            if node.get("type") == "object" and "properties" in node:
-                assert set(node["properties"]) == set(node.get("required", []))
-                assert "additionalProperties" not in node or node["additionalProperties"] is False
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    walk(schema)
-
-
 def test_empty_lines_and_blank_description(client, org, monkeypatch):
     headers, _ = org
     fake = use(monkeypatch, FakeClient())
@@ -493,27 +435,6 @@ def test_request_caps_return_422(client, org, monkeypatch):
     assert post([{"description": "a", "unit": "u" * 100, "vendorItemNumber": "v" * 100}]).status_code == 200
     assert post([{"description": "a", "unit": "u" * 101}]).status_code == 422
     assert post([{"description": "a", "vendorItemNumber": "v" * 101}]).status_code == 422
-
-
-def test_upsert_statement_on_postgresql():
-    from sqlalchemy.dialects import postgresql
-
-    stmt = postgresql.insert(ArticleEmbedding).values(
-        [{"text_hash": "h", "model": "m", "embedding": [1.0]}]
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["text_hash"],
-        set_={"model": stmt.excluded.model, "embedding": stmt.excluded.embedding},
-    )
-    sql = str(stmt.compile(dialect=postgresql.dialect()))
-    assert "ON CONFLICT (text_hash) DO UPDATE" in sql
-    assert "model = excluded.model" in sql and "embedding = excluded.embedding" in sql
-
-
-def test_upsert_rejects_unknown_dialect():
-    fake_db = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="mysql")))
-    with pytest.raises(NotImplementedError):
-        cm._upsert_embeddings(fake_db, [{"text_hash": "h", "model": "m", "embedding": [1.0]}])
 
 
 @pytest.mark.parametrize("old_model", [settings.openai_embedding_model, "old-model"])

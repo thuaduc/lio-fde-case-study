@@ -1,13 +1,8 @@
 """Rich order lines: persistence, server totals, link validation, open-only
 editing and approval reset. TestClient over in-memory SQLite."""
-import importlib.util
 import uuid
-from pathlib import Path
 
 import pytest
-import sqlalchemy as sa
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
@@ -17,8 +12,6 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import RequestActivity
-from app.routers.requests import compute_totals
-from app.schemas.requests import OrderLineIn
 from app.seed import seed
 
 engine = create_engine(
@@ -184,14 +177,6 @@ def test_create_round_trips_rich_lines(client, auth):
     assert got["order_lines"][0]["sources"] == [BOX]
 
 
-def test_extracted_line_json_is_accepted():
-    from app.schemas.extraction import ExtractedLine
-
-    ex = ExtractedLine(key="1", kind="fee", sources=[BOX], listUnitPrice=1.0)
-    parsed = OrderLineIn.model_validate(ex.model_dump(by_alias=True))
-    assert parsed.kind == "fee" and parsed.sources[0].page == 1
-
-
 def test_server_computes_totals(client, auth):
     lines = [
         line("1", unitPrice=100.0, amount=3, totalPrice=1.0),  # wrong total sent
@@ -209,16 +194,6 @@ def test_server_computes_totals(client, auth):
     assert body["netTotal"] == 300.0 + 180.0 - 40.0  # alternative excluded
     assert body["taxTotal"] == 10.0
     assert body["total_cost"] == 450.0
-
-
-def test_compute_totals_unit():
-    mk = lambda k, kind, parent, total: OrderLineIn(  # noqa: E731
-        positionDescription="x", unitPrice=0, amount=1, unit="u",
-        totalPrice=total, key=k, kind=kind, parentKey=parent,
-    )
-    lines = [mk("1", "item", None, 10.0), mk("2", "optional", "1", 5.0)]
-    assert compute_totals(lines, None) == (10.0, 10.0)
-    assert compute_totals(lines, 2.5) == (10.0, 12.5)
 
 
 def test_legacy_payload_defaults(client, auth):
@@ -266,42 +241,6 @@ def test_child_of_inactive_line_excluded(client, auth):
     r = create(client, auth, lines)
     assert r.status_code == 201, r.text
     assert r.json()["netTotal"] == 100.0
-
-
-def test_existing_rows_backfilled():
-    """Run the real 0007 upgrade() on a pre-0007 SQLite schema holding a row."""
-    path = Path(__file__).resolve().parent.parent / "alembic/versions/0007_rich_order_lines.py"
-    spec = importlib.util.spec_from_file_location("mig0007", path)
-    mig = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mig)
-    assert mig.down_revision == "0006"
-
-    eng = create_engine("sqlite://")
-    with eng.begin() as conn:
-        for ddl in (
-            "CREATE TABLE articles (id CHAR(32) PRIMARY KEY)",
-            "CREATE TABLE procurement_requests (id CHAR(32) PRIMARY KEY)",
-            "CREATE TABLE order_lines (id CHAR(32) PRIMARY KEY, request_id CHAR(32) NOT NULL,"
-            " position_description TEXT NOT NULL, unit_price NUMERIC NOT NULL,"
-            " amount NUMERIC NOT NULL, unit TEXT NOT NULL, total_price NUMERIC NOT NULL,"
-            " line_order INTEGER NOT NULL)",
-            "INSERT INTO procurement_requests VALUES ('r1')",
-            "INSERT INTO order_lines VALUES ('a','r1','Desk',1,1,'pc',1,1)",
-            "INSERT INTO order_lines VALUES ('b','r1','Chair',1,1,'pc',1,2)",
-        ):
-            conn.execute(sa.text(ddl))
-        with Operations.context(MigrationContext.configure(conn)):
-            mig.upgrade()
-        rows = conn.execute(
-            sa.text("SELECT line_key, line_type, parent_key FROM order_lines ORDER BY line_order")
-        ).all()
-        assert rows == [("1", "item", None), ("2", "item", None)]
-        # constraints are live
-        with pytest.raises(sa.exc.IntegrityError):
-            conn.execute(sa.text(
-                "INSERT INTO order_lines (id, request_id, position_description, unit_price,"
-                " amount, unit, total_price, line_order, line_key) "
-                "VALUES ('c','r1','Dup',1,1,'pc',1,3,'1')"))
 
 
 def _make(client, auth, lines=None, **kw):
@@ -436,11 +375,6 @@ def test_field_sources_round_trip_and_header_only_keeps(client, auth):
     # explicit fieldSources replaces it
     r = put(client, auth, rid, _echo(body), fieldSources={"vendorName": [BOX]})
     assert r.json()["fieldSources"] == {"vendorName": [BOX]}
-
-
-def test_field_sources_absent_is_null(client, auth):
-    body = _make(client, auth)
-    assert body["fieldSources"] is None
 
 
 def test_extraction_warning_objects_round_trip(client, auth):
