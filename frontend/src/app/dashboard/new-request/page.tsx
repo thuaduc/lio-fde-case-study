@@ -75,7 +75,7 @@ export default function NewRequestPage() {
   };
   const totals = computeTotals(orderLines, taxTotal);
   // Negotiated catalog prices for the lines (task 2).
-  const catalog = useCatalogSuggestions(orderLines, true);
+  const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(orderLines, true);
   const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
   const otherSuppliers = [
     ...new Set(
@@ -577,6 +577,9 @@ export default function NewRequestPage() {
             <p className="mb-4 rounded-lg bg-ink-800/[0.04] px-3 py-2 text-sm text-ink/70">
               This request now includes catalog lines from {otherSuppliers.join(', ')}, not only {vendorName || 'the quote vendor'}.
             </p>
+          )}
+          {catalogLoading && (
+            <p className="mb-3 text-sm text-ink/45">Looking for matching catalog articles…</p>
           )}
           <OrderLinesEditor
             renderLineExtra={(line) => (

@@ -71,7 +71,7 @@ export default function RequestDetailPage() {
   const [taxTotal, setTaxTotal] = useState(0);
   const [linesDirty, setLinesDirty] = useState(false);
   const docPanel = useRef<DocumentPanelHandle>(null);
-  const catalog = useCatalogSuggestions(lines, request?.status === 'open');
+  const { byKey: catalog, loading: catalogLoading } = useCatalogSuggestions(lines, request?.status === 'open');
   const [appliedArticles, setAppliedArticles] = useState<Record<string, api.ArticleSuggestion>>({});
 
   /** Click handler that highlights one header field, when its location is known. */
@@ -378,6 +378,9 @@ export default function RequestDetailPage() {
                 This request is approved. If saving changes the total, it goes back to pending approval
                 unless the new total is below your organization&apos;s approval threshold.
               </p>
+            )}
+            {catalogLoading && (
+              <p className="mb-3 text-sm text-ink/45">Looking for matching catalog articles…</p>
             )}
             <OrderLinesEditor
               renderLineExtra={(line) => (

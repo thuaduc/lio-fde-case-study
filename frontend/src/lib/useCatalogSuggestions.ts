@@ -11,6 +11,7 @@ import type { Line } from '@/lib/orderLines';
  */
 export function useCatalogSuggestions(lines: Line[], enabled: boolean) {
   const [byKey, setByKey] = useState<Record<string, api.ArticleSuggestion[]>>({});
+  const [loading, setLoading] = useState(false);
   const seq = useRef(0);
 
   const candidates = lines.filter(
@@ -23,10 +24,12 @@ export function useCatalogSuggestions(lines: Line[], enabled: boolean) {
   useEffect(() => {
     if (!enabled || candidates.length === 0) {
       setByKey({});
+      setLoading(false);
       return;
     }
     const mine = ++seq.current;
     const t = setTimeout(async () => {
+      setLoading(true);
       try {
         const res = await api.articles.suggestions(
           candidates.map((l) => ({
@@ -45,11 +48,13 @@ export function useCatalogSuggestions(lines: Line[], enabled: boolean) {
         setByKey(next);
       } catch {
         // Suggestions are optional; the form works without them.
+      } finally {
+        if (mine === seq.current) setLoading(false);
       }
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, enabled]);
 
-  return byKey;
+  return { byKey, loading };
 }
