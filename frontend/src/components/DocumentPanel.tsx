@@ -7,13 +7,13 @@ import { cn } from '@/lib/utils';
 
 /**
  * Side-by-side PDF viewer built on pdf.js's own viewer components, so the page
- * can drive it: `showSource(line)` jumps to the line's page, runs a find for its
- * source text (pdf.js highlights the matches), and outlines the stored source
- * boxes as a fallback when the text search finds nothing.
+ * can drive it: `showSource(line)` outlines the line's stored source boxes
+ * (from the extraction's PDF row coordinates) and scrolls them into view.
+ * The toolbar search box is a plain manual search.
  */
 
 export interface DocumentPanelHandle {
-  showSource(line: { sourceText?: string | null; sources?: SourceBox[] }): void;
+  showSource(line: { sources?: SourceBox[] }): void;
 }
 
 interface Props {
@@ -149,19 +149,21 @@ const DocumentPanel = forwardRef<DocumentPanelHandle, Props>(function DocumentPa
         const cur = v.current;
         if (!cur) return;
         boxesRef.current = line.sources ?? [];
-        drawBoxes();
         const first = boxesRef.current[0];
-        if (first) cur.viewer.scrollPageIntoView({ pageNumber: first.page });
-        if (line.sourceText) {
-          setQuery(line.sourceText);
-          find(line.sourceText);
-        } else {
-          setMatches(null);
-        }
-        containerRef.current?.closest('[data-document-panel]')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        if (!first) return;
+        containerRef.current
+          ?.closest('[data-document-panel]')
+          ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        cur.viewer.scrollPageIntoView({ pageNumber: first.page });
+        // Page divs exist for every page (rendered lazily), so the overlay can be
+        // placed right away and scrolled to the middle of the viewer.
+        requestAnimationFrame(() => {
+          drawBoxes();
+          document.querySelector('.lio-source-box')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
       },
     }),
-    [drawBoxes, find],
+    [drawBoxes],
   );
 
   const zoom = (factor: number) => {

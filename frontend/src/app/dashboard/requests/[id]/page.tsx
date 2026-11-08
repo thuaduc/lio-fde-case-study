@@ -1,12 +1,37 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import type { ProcurementRequestWithDetails } from '@/types/database';
+import OrderLinesEditor from '@/components/OrderLinesEditor';
+import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
+import { type Line, linesForSave, normalizeLines } from '@/lib/orderLines';
+
+/** Map stored lines (snake_case base + camelCase rich fields) to editor lines. */
+const toEditorLines = (req: ProcurementRequestWithDetails): Line[] =>
+  normalizeLines(
+    (req.order_lines || []).map((l) => ({
+      positionDescription: l.position_description,
+      unitPrice: l.unit_price,
+      amount: l.amount,
+      unit: l.unit,
+      totalPrice: l.total_price,
+      key: l.key,
+      parentKey: l.parentKey ?? null,
+      kind: l.kind ?? 'item',
+      position: l.position ?? null,
+      vendorItemNumber: l.vendorItemNumber ?? null,
+      listUnitPrice: l.listUnitPrice ?? null,
+      adjustmentPercent: l.adjustmentPercent ?? null,
+      sources: l.sources ?? [],
+      sourceText: l.sourceText ?? null,
+      articleId: l.articleId ?? null,
+    })),
+  );
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -36,6 +61,17 @@ export default function RequestDetailPage() {
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [taxTotal, setTaxTotal] = useState(0);
+  const [linesDirty, setLinesDirty] = useState(false);
+  const docPanel = useRef<DocumentPanelHandle>(null);
+
+  const adopt = (req: ProcurementRequestWithDetails) => {
+    setRequest(req);
+    setLines(toEditorLines(req));
+    setTaxTotal(req.taxTotal ?? 0);
+    setLinesDirty(false);
+  };
 
   // Edit form state
   const [form, setForm] = useState({
@@ -50,7 +86,7 @@ export default function RequestDetailPage() {
         api.organizations.getMine(),
         api.requests.getActivity(id),
       ]);
-      setRequest(req);
+      adopt(req);
       setRole(org.role);
       setActivity(acts);
       const url = await api.requests.documentUrl(id).catch(() => null);
@@ -78,7 +114,7 @@ export default function RequestDetailPage() {
       api.requests.get(id),
       api.requests.getActivity(id),
     ]);
-    setRequest(req);
+    adopt(req);
     setActivity(acts);
   };
 
@@ -132,31 +168,54 @@ export default function RequestDetailPage() {
     setEditing(true);
   };
 
+  /** Full update payload: header fields from `header`, lines + tax from the editor. */
+  const updatePayload = (header: typeof form, editorLines: Line[], tax: number) => ({
+    requestorName: header.requestorName,
+    title: header.title,
+    vendorName: header.vendorName,
+    vatId: header.vatId,
+    commodityGroupId: header.commodityGroupId || 0,
+    totalCost: header.totalCost,
+    department: header.department,
+    taxTotal: tax,
+    orderLines: linesForSave(editorLines),
+  });
+
+  const headerFromRequest = () => ({
+    requestorName: request!.requestor_name,
+    title: request!.title,
+    vendorName: request!.vendor_name,
+    vatId: request!.vat_id || '',
+    department: request!.department || '',
+    commodityGroupId: request!.commodity_group_id,
+    totalCost: request!.total_cost || 0,
+  });
+
   const saveEdit = async () => {
     if (!request) return;
     setBusy(true); setError(''); setSuccess('');
     try {
-      await api.requests.update(id, {
-        requestorName: form.requestorName,
-        title: form.title,
-        vendorName: form.vendorName,
-        vatId: form.vatId,
-        commodityGroupId: form.commodityGroupId || 0,
-        totalCost: form.totalCost,
-        department: form.department,
-        orderLines: (request.order_lines || []).map((l) => ({
-          positionDescription: l.position_description,
-          unitPrice: l.unit_price,
-          amount: l.amount,
-          unit: l.unit,
-          totalPrice: l.total_price,
-        })),
-      });
+      // Send the stored lines back unchanged (all rich fields included).
+      await api.requests.update(id, updatePayload(form, toEditorLines(request), request.taxTotal ?? 0));
       setEditing(false);
       setSuccess('Request updated.');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update request');
+    }
+    setBusy(false);
+  };
+
+  const saveLines = async () => {
+    if (!request) return;
+    setBusy(true); setError(''); setSuccess('');
+    try {
+      const wasApproved = request.approval_status === 'approved';
+      await api.requests.update(id, updatePayload(headerFromRequest(), lines, taxTotal));
+      await refresh();
+      setSuccess(wasApproved ? 'Lines saved. If the total changed, the request is pending approval again.' : 'Lines saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save lines');
     }
     setBusy(false);
   };
@@ -260,20 +319,46 @@ export default function RequestDetailPage() {
           </div>
 
           <div className="lio-card p-6">
-            <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Order Lines</h2>
-            <div className="space-y-2">
-              {request.order_lines?.map((line, i) => (
-                <div key={line.id} className="flex justify-between items-start bg-ink-800/[0.02] rounded-lg p-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
-                    <p className="text-sm text-ink/55 mt-0.5">
-                      {line.amount} {line.unit} × {usd(line.unit_price)}
-                    </p>
-                  </div>
-                  <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold tracking-tight text-ink">Order Lines</h2>
+              {linesDirty && (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => adopt(request)}>
+                    Discard
+                  </Button>
+                  <Button size="sm" loading={busy} disabled={busy} onClick={saveLines}>
+                    Save lines
+                  </Button>
                 </div>
-              ))}
+              )}
             </div>
+            {linesDirty && request.approval_status === 'approved' && (
+              <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                This request is approved. If saving changes the total, it goes back to pending approval.
+              </p>
+            )}
+            <OrderLinesEditor
+              lines={lines}
+              taxTotal={taxTotal}
+              editable={request.status === 'open'}
+              lockedReason="Lines can only be changed while the request is open."
+              onChange={(next, tax) => {
+                setLines(next);
+                setTaxTotal(tax);
+                setLinesDirty(true);
+              }}
+              onShowSource={pdfUrl ? (line) => docPanel.current?.showSource(line) : undefined}
+            />
+            {(request.extractionWarnings?.length ?? 0) > 0 && (
+              <div className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <p className="font-medium">Extraction notes</p>
+                <ul className="mt-1 list-disc pl-5">
+                  {request.extractionWarnings!.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="lio-card p-6">
@@ -294,19 +379,17 @@ export default function RequestDetailPage() {
         </div>
 
         {/* Right column: PDF viewer */}
-        <div className="lio-card p-6">
-          <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Original Document</h2>
+        <div className="lg:sticky lg:top-6 self-start">
           {pdfUrl ? (
-            <iframe
-              src={pdfUrl}
-              title="Original PDF"
-              className="w-full h-[720px] rounded-lg border border-line"
-            />
+            <DocumentPanel ref={docPanel} fileUrl={pdfUrl} title="Original Document" />
           ) : (
-            <div className="h-[720px] rounded-lg border border-dashed border-line flex items-center justify-center text-center px-6">
-              <p className="text-sm text-ink/45">
-                No PDF attached. Upload one when creating a request to see it here.
-              </p>
+            <div className="lio-card p-6">
+              <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Original Document</h2>
+              <div className="h-[720px] rounded-lg border border-dashed border-line flex items-center justify-center text-center px-6">
+                <p className="text-sm text-ink/45">
+                  No PDF attached. Upload one when creating a request to see it here.
+                </p>
+              </div>
             </div>
           )}
         </div>

@@ -7,7 +7,7 @@ import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
-import { type Line, computeTotals, normalizeLines } from '@/lib/orderLines';
+import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
 
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
@@ -114,7 +114,8 @@ export default function NewRequestPage() {
       return;
     }
 
-    if (orderLines.length === 0) {
+    const linesToSave = linesForSave(orderLines);
+    if (linesToSave.length === 0) {
       setError('Please add at least one order line');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
@@ -131,7 +132,7 @@ export default function NewRequestPage() {
         netTotal: totals.net,
         taxTotal,
         department,
-        orderLines,
+        orderLines: linesToSave,
       });
 
       // Attach the original PDF (if one was uploaded) so it shows on the detail page.

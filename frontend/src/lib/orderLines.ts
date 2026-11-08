@@ -7,7 +7,13 @@
  */
 import type { LineKind, OrderLineInput } from '@/lib/api';
 
-export type Line = OrderLineInput & { key: string; kind: LineKind; parentKey: string | null };
+export type Line = OrderLineInput & {
+  key: string;
+  kind: LineKind;
+  parentKey: string | null;
+  /** Soft-removed in the editor: struck through, out of the totals, restorable. Never saved. */
+  removed?: boolean;
+};
 
 export const LINE_KINDS: LineKind[] = [
   'item',
@@ -43,6 +49,7 @@ export function byKey(lines: Line[], key: string | null | undefined): Line | und
 }
 
 export function isActive(line: Line, lines: Line[], seen = new Set<string>()): boolean {
+  if (line.removed) return false;
   if (line.kind === 'alternative' || line.kind === 'optional') return false;
   if (!line.parentKey) return true;
   if (seen.has(line.key)) return false; // defensive: never loop on bad data
@@ -97,10 +104,21 @@ export function setKind(lines: Line[], key: string, kind: LineKind): Line[] {
   });
 }
 
-export function removeLine(lines: Line[], key: string): Line[] {
+/** Soft remove / restore: the line stays visible (struck through) so it can come back. */
+export function setRemoved(lines: Line[], key: string, removed: boolean): Line[] {
+  return lines.map((l) => (l.key === key ? { ...l, removed } : l));
+}
+
+/** Lines to send to the API: soft-removed lines are dropped, links to them cleared. */
+export function linesForSave(lines: Line[]): Line[] {
+  const removed = new Set(lines.filter((l) => l.removed).map((l) => l.key));
   return lines
-    .filter((l) => l.key !== key)
-    .map((l) => (l.parentKey === key ? { ...l, parentKey: null } : l));
+    .filter((l) => !l.removed)
+    .map(({ removed: _removed, ...l }) =>
+      l.parentKey && removed.has(l.parentKey)
+        ? { ...l, parentKey: null, kind: l.kind === 'alternative' ? 'optional' : l.kind }
+        : l,
+    );
 }
 
 /** Items in order, each followed by its children; then whole-quote charges. */

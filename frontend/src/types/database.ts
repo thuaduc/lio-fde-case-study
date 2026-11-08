@@ -63,6 +63,13 @@ export type ProcurementRequest = {
   total_cost: number | null;
   created_at: string;
   updated_at: string;
+  // Rich-extraction fields (camelCase on the wire).
+  quoteNumber?: string | null;
+  validUntil?: string | null;
+  currency?: string | null;
+  netTotal?: number | null;
+  taxTotal?: number | null;
+  extractionWarnings?: string[] | null;
 };
 
 export type OrderLine = {
@@ -75,6 +82,16 @@ export type OrderLine = {
   total_price: number;
   line_order: number;
   created_at: string;
+  key: string;
+  parentKey?: string | null;
+  kind?: 'item' | 'surcharge' | 'discount' | 'shipping' | 'fee' | 'alternative' | 'optional';
+  position?: string | null;
+  vendorItemNumber?: string | null;
+  listUnitPrice?: number | null;
+  adjustmentPercent?: number | null;
+  sources?: { page: number; x0: number; y0: number; x1: number; y1: number }[];
+  sourceText?: string | null;
+  articleId?: string | null;
 };
 
 // ============================================================================
