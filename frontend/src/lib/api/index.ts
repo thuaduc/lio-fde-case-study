@@ -63,6 +63,11 @@ export type LineKind =
   | 'alternative'
   | 'optional';
 
+/** Where header values (vendor, tax ID, ...) are printed in the PDF. */
+export type FieldSources = Partial<
+  Record<'vendorName' | 'vatId' | 'department' | 'quoteNumber' | 'validUntil', SourceBox[]>
+>;
+
 /** Highlight box on a PDF page; coordinates are 0-1 fractions, origin top-left. */
 export interface SourceBox {
   page: number;
@@ -100,6 +105,7 @@ export interface CreateRequestInput {
   totalCost: number;
   netTotal?: number | null;
   taxTotal?: number | null;
+  fieldSources?: FieldSources | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -113,6 +119,7 @@ export interface UpdateRequestInput {
   totalCost: number;
   netTotal?: number | null;
   taxTotal?: number | null;
+  fieldSources?: FieldSources | null;
   department: string;
   orderLines: OrderLineInput[];
 }
@@ -131,6 +138,7 @@ export interface ExtractedVendorData {
   currency?: string | null;
   netTotal?: number | null;
   taxTotal?: number | null;
+  fieldSources?: FieldSources;
 }
 
 export interface ExtractionResponse {

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { LineKind } from '@/lib/api';
 import { Input } from '@/components/base';
+import SourceButton from '@/components/SourceButton';
 import {
   LINE_KINDS,
   type Line,
@@ -114,29 +115,7 @@ export default function OrderLinesEditor({
 
   const docButton = (line: Line) =>
     onShowSource && (line.sources?.length ?? 0) > 0 ? (
-      <button
-        type="button"
-        title="Show in document"
-        aria-label="Show in document"
-        onClick={(e) => {
-          e.stopPropagation();
-          onShowSource(line);
-        }}
-        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink/45 hover:bg-ink-800/[0.06] hover:text-ink"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-[18px] w-[18px]"
-        >
-          <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7S2.5 12 2.5 12z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </button>
+      <SourceButton onClick={() => onShowSource(line)} />
     ) : null;
 
   const subline = (line: Line) => {

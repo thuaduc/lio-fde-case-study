@@ -6,6 +6,7 @@ import * as api from '@/lib/api';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { Button, Input, Alert, Loader } from '@/components/base';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
+import SourceButton from '@/components/SourceButton';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, computeTotals, linesForSave, normalizeLines } from '@/lib/orderLines';
 
@@ -35,6 +36,22 @@ export default function NewRequestPage() {
   const [taxTotal, setTaxTotal] = useState<number>(0);
   const [quotedGrandTotal, setQuotedGrandTotal] = useState<number | null>(null);
   const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
+  const [fieldSources, setFieldSources] = useState<api.FieldSources>({});
+
+  /** All boxes for the given header fields, for one "show in document" click. */
+  const boxesFor = (...keys: (keyof api.FieldSources)[]) =>
+    keys.flatMap((k) => fieldSources[k] ?? []);
+  const sectionHeading = (title: string, boxes: api.SourceBox[]) => (
+    <div className="mb-4 flex items-center justify-between gap-2">
+      <h2 className="text-xl font-semibold tracking-tight text-ink">{title}</h2>
+      {fileUrl && boxes.length > 0 && (
+        <SourceButton
+          label={`Show ${title.toLowerCase()} in document`}
+          onClick={() => docPanel.current?.showSource({ sources: boxes })}
+        />
+      )}
+    </div>
+  );
   const totals = computeTotals(orderLines, taxTotal);
 
   // Requestor defaults to the signed-in user; department to the one they used last.
@@ -75,6 +92,7 @@ export default function NewRequestPage() {
     setSuccess('');
     setWarning('');
     setExtractionWarnings([]);
+    setFieldSources({});
     setExtracting(true);
 
     try {
@@ -97,6 +115,7 @@ export default function NewRequestPage() {
       setTaxTotal(extracted.taxTotal ?? 0);
       setQuotedGrandTotal(extracted.totalCost || null);
       setExtractionWarnings(extractionResult.warnings ?? []);
+      setFieldSources(extracted.fieldSources ?? {});
 
       // Set commodity group (now included in extraction)
       if (extracted.commodityGroupId) {
@@ -156,6 +175,7 @@ export default function NewRequestPage() {
         totalCost: totals.grand,
         netTotal: totals.net,
         taxTotal,
+        fieldSources,
         department,
         orderLines: linesToSave,
       });
@@ -270,7 +290,7 @@ export default function NewRequestPage() {
 
         {/* Request Details */}
         <div className="lio-card p-6 space-y-4">
-          <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Request Details</h2>
+          {sectionHeading('Request Details', boxesFor('department', 'quoteNumber', 'validUntil'))}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
@@ -300,7 +320,7 @@ export default function NewRequestPage() {
 
         {/* Vendor Information */}
         <div className="lio-card p-6 space-y-4">
-          <h2 className="text-xl font-semibold tracking-tight text-ink mb-4">Vendor Information</h2>
+          {sectionHeading('Vendor Information', boxesFor('vendorName', 'vatId'))}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input

@@ -70,6 +70,7 @@ export type ProcurementRequest = {
   netTotal?: number | null;
   taxTotal?: number | null;
   extractionWarnings?: string[] | null;
+  fieldSources?: import('@/lib/api').FieldSources | null;
 };
 
 export type OrderLine = {

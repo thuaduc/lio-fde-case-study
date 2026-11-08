@@ -8,6 +8,7 @@ import { Button, Input, Alert } from '@/components/base';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import type { ProcurementRequestWithDetails } from '@/types/database';
 import OrderLinesEditor from '@/components/OrderLinesEditor';
+import SourceButton from '@/components/SourceButton';
 import DocumentPanel, { type DocumentPanelHandle } from '@/components/DocumentPanel';
 import { type Line, linesForSave, normalizeLines } from '@/lib/orderLines';
 
@@ -178,6 +179,7 @@ export default function RequestDetailPage() {
     totalCost: header.totalCost,
     department: header.department,
     taxTotal: tax,
+    fieldSources: request?.fieldSources ?? null,
     orderLines: linesForSave(editorLines),
   });
 
@@ -302,7 +304,19 @@ export default function RequestDetailPage() {
         {/* Left column: details, order lines, activity */}
         <div className="space-y-6">
           <div className="lio-card p-6">
-            <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Details</h2>
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold tracking-tight text-ink">Details</h2>
+              {pdfUrl && Object.values(request.fieldSources ?? {}).some((b) => (b?.length ?? 0) > 0) && (
+                <SourceButton
+                  label="Show details in document"
+                  onClick={() =>
+                    docPanel.current?.showSource({
+                      sources: Object.values(request.fieldSources ?? {}).flatMap((b) => b ?? []),
+                    })
+                  }
+                />
+              )}
+            </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <Field label="Requestor" value={request.requestor_name} />
               <Field label="Department" value={request.department || '—'} />
