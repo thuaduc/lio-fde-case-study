@@ -68,7 +68,7 @@ def create_commodity_group(
     membership: OrganizationMember = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> CommodityGroupOut:
-    category, name = payload.category.strip(), payload.name.strip()
+    category, name = payload.category, payload.name  # trimmed by the schema
     _check_unique(db, membership, category, name)
     group = CommodityGroup(
         organization_id=membership.organization_id,
@@ -90,8 +90,8 @@ def update_commodity_group(
 ) -> CommodityGroupOut:
     group = _get_org_group(db, group_id, membership)
     sent = payload.model_fields_set
-    category = payload.category.strip() if payload.category else group.category
-    name = payload.name.strip() if payload.name else group.name
+    category = payload.category or group.category  # trimmed by the schema
+    name = payload.name or group.name
     if (category, name) != (group.category, group.name):
         _check_unique(db, membership, category, name, exclude_id=group.id)
     group.category, group.name = category, name

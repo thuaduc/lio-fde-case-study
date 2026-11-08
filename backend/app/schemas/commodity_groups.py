@@ -1,13 +1,18 @@
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, StringConstraints
+
+# Category and name must be non-empty after trimming (422 otherwise).
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class CommodityGroupCreate(BaseModel):
-    category: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    category: NonBlank
+    name: NonBlank
     description: str | None = None
 
 
 class CommodityGroupUpdate(BaseModel):
-    category: str | None = Field(default=None, min_length=1)
-    name: str | None = Field(default=None, min_length=1)
+    category: NonBlank | None = None
+    name: NonBlank | None = None
     description: str | None = None

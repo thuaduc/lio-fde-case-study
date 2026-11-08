@@ -77,28 +77,40 @@ def seed_org_commodity_groups(db: Session) -> int:
 
 
 # Acme's booking rules (customer brief, task 3), as editable seed data:
-# (category, name, description). The description is only filled in when the
-# group has none, so an admin's edits are never overwritten.
+# (category, name, description). Each description states only the rule, so it
+# doesn't pull unrelated items (laptops, copy paper) away from their own groups.
+# The description is only filled in when the group has none, so an admin's
+# edits are never overwritten.
 ACME_BOOKING_GROUPS: list[tuple[str, str, str]] = [
     (
         "Facility Management",
         "Electrical Engineering",
-        "Electrical installations, components and wiring material. Cable ties "
-        "always have to be booked under Electrical Engineering.",
+        "Cable ties are always booked here.",
     ),
     (
         "Information Technology",
         "IT Hardware",
-        "Computer hardware, peripherals and printer supplies. Printer toner "
-        "always has to be booked under IT Hardware.",
+        "Printer toner is always booked here.",
     ),
     (
         "Office & Administration",
         "Office Supplies",
-        "Office consumables and everyday office needs. Small software "
-        "subscriptions always have to be booked under Office Supplies.",
+        "Small software subscriptions are always booked here.",
     ),
 ]
+
+# Earlier seeded wording (too broad). A stored description equal to one of
+# these is replaced once; any other text is an admin's and stays.
+SUPERSEDED_ACME_DESCRIPTIONS: frozenset[str] = frozenset(
+    {
+        "Electrical installations, components and wiring material. Cable ties "
+        "always have to be booked under Electrical Engineering.",
+        "Computer hardware, peripherals and printer supplies. Printer toner "
+        "always has to be booked under IT Hardware.",
+        "Office consumables and everyday office needs. Small software "
+        "subscriptions always have to be booked under Office Supplies.",
+    }
+)
 
 
 def seed_acme_booking_groups(db: Session) -> int:
@@ -126,7 +138,10 @@ def seed_acme_booking_groups(db: Session) -> int:
                 )
             )
             changed += 1
-        elif group.description is None:
+        elif (
+            group.description is None
+            or group.description in SUPERSEDED_ACME_DESCRIPTIONS
+        ):
             group.description = description
             changed += 1
     return changed

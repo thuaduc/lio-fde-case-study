@@ -477,3 +477,78 @@ def test_migration_repoints_requests():
         assert cols == {"id", "category", "name", "created_at"}
         cols = {c["name"] for c in sa.inspect(conn).get_columns("order_lines")}
         assert "commodity_group_id" not in cols
+
+
+# --- review fixes ---------------------------------------------------------------
+
+
+def test_blank_category_or_name_is_422(client, acme):
+    for body in ({"category": "  ", "name": "X"}, {"category": "X", "name": " \t"}):
+        assert client.post("/commodity-groups", json=body, headers=acme).status_code == 422
+    gid = new_group(client, acme)["id"]
+    for body in ({"name": "   "}, {"category": ""}):
+        r = client.patch(f"/commodity-groups/{gid}", json=body, headers=acme)
+        assert r.status_code == 422, r.text
+    # surrounding whitespace is trimmed, not rejected
+    r = client.patch(f"/commodity-groups/{gid}", json={"name": "  Trimmed  "}, headers=acme)
+    assert r.status_code == 200 and r.json()["name"] == "Trimmed"
+    client.delete(f"/commodity-groups/{gid}", headers=acme)
+
+
+def test_unchanged_legacy_group_is_kept(client, acme):
+    from app.models import OrderLine, ProcurementRequest
+
+    own = group_id(client, acme, "Information Technology", "Software")
+    created = client.post("/requests", json=req([line("1", commodityGroupId=own)]),
+                          headers=acme).json()
+    rid = uuid.UUID(created["id"])
+    # a legacy request still pointing at a global template (id 1)
+    with Session() as s:
+        s.get(ProcurementRequest, rid).commodity_group_id = 1
+        for ln in s.scalars(select(OrderLine).where(OrderLine.request_id == rid)):
+            ln.commodity_group_id = 1
+        s.commit()
+    body = as_update(req([line("1", commodityGroupId=1)], commodityGroupId=1))
+    r = client.put(f"/requests/{rid}", json=body, headers=acme)
+    assert r.status_code == 200, r.text
+    assert r.json()["commodity_group_id"] == 1
+    # choosing a different template is still rejected, on the line or the request
+    r = client.put(f"/requests/{rid}", json=as_update(
+        req([line("1", commodityGroupId=2)], commodityGroupId=1)), headers=acme)
+    assert r.status_code == 422
+    r = client.put(f"/requests/{rid}", json=as_update(
+        req([line("1", commodityGroupId=1)], commodityGroupId=2)), headers=acme)
+    assert r.status_code == 422
+    client.delete(f"/requests/{rid}", headers=acme)
+
+
+def test_acme_descriptions_state_only_the_rule_and_old_text_is_corrected():
+    from app.seed import ACME_BOOKING_GROUPS, SUPERSEDED_ACME_DESCRIPTIONS
+
+    with Session() as s:
+        acme_id = s.scalar(select(Organization.id).where(Organization.slug == "acme"))
+
+        def get(name):
+            return s.scalar(select(CommodityGroup).where(
+                CommodityGroup.organization_id == acme_id, CommodityGroup.name == name))
+
+        expected = {name: desc for _, name, desc in ACME_BOOKING_GROUPS}
+        assert expected == {
+            "Electrical Engineering": "Cable ties are always booked here.",
+            "IT Hardware": "Printer toner is always booked here.",
+            "Office Supplies": "Small software subscriptions are always booked here.",
+        }
+        for name, desc in expected.items():
+            assert get(name).description == desc
+
+        old_ee = next(d for d in SUPERSEDED_ACME_DESCRIPTIONS if "Cable ties" in d)
+        get("Electrical Engineering").description = old_ee
+        get("IT Hardware").description = "Admin wording: toner goes here."
+        s.commit()
+        counts = seed(s)
+        assert counts["acme_booking_groups"] == 1
+        assert get("Electrical Engineering").description == expected["Electrical Engineering"]
+        assert get("IT Hardware").description == "Admin wording: toner goes here."
+        assert seed(s)["acme_booking_groups"] == 0
+        get("IT Hardware").description = expected["IT Hardware"]
+        s.commit()

@@ -90,12 +90,17 @@ def _validate_commodity_group(
     commodity_group_id: int,
     current: int | None = None,
 ) -> None:
-    """The group must be the caller's org's and active. An archived group is
-    accepted only when it is ``current`` (the value already stored)."""
+    """A newly chosen group must be the caller's org's and active.
+
+    The value already stored (``current``) is accepted unchanged, even if it
+    was archived since or isn't the org's (a legacy request still pointing at
+    a global template)."""
+    if current is not None and commodity_group_id == current:
+        return
     group = db.get(CommodityGroup, commodity_group_id)
     if group is None or group.organization_id != organization_id:
         raise _unprocessable(f"Unknown commodity group id: {commodity_group_id}")
-    if group.archived_at is not None and commodity_group_id != current:
+    if group.archived_at is not None:
         raise _unprocessable(f"Commodity group {group.name!r} is archived")
 
 
@@ -111,7 +116,7 @@ def _assign_groups(
     - On update, a line that doesn't send ``commodityGroupId`` (an older
       client) keeps the stored group of the line with the same key.
     - Line groups and the request group must be the org's and active; a value
-      already stored on the same line / request may stay even if archived.
+      already stored on the same line / request may stay unchanged regardless.
     - Adjustments with a parent and no group take the parent's group.
     - The primary group is the largest active spend; without any line group
       the client's ``commodityGroupId`` is used, and one of the two is required.
