@@ -244,9 +244,9 @@ Rules:
 - Use plain numbers only (no currency symbols). US number formatting: "1,438.00" = 1438.00. Write units out in plain English (e.g. "ea." -> "pieces").
 - net_total is the subtotal before tax, tax_total the tax, grand_total the amount payable including tax.
 - source_rows lists the id of every row a line's text and price come from, including continuation rows on later pages.
-- vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 27-1073640'); look there before giving up.
+- vendor_tax_id: the vendor's EIN / Tax ID is often printed only in the footer or letterhead small print (e.g. 'CEO: ... | EIN: 12-3456789'); look there before giving up.
 - vendor_name: prefer the letterhead / sender line over a later mention in the terms.
-- field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 94 1985704' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
+- field_source_rows cites, for vendor_name, vendor_tax_id, department, quote_number and valid_until, the row id(s) holding the value itself (e.g. the 'EIN: 12-3456789' row, the vendor's name/letterhead row); an empty list when the value is not on the quote.
 - valid_until is an ISO date (YYYY-MM-DD). title is a SHORT (2-5 words) description of what is purchased.
 - Classify every line: its commodity_group_id is the SINGLE most appropriate group below for that line, or null if genuinely uncertain. Discounts, surcharges, shipping and fees tied to a position take that position's group.
 - commodity_group_id (quote level): the group of the largest share of the spend, or null if genuinely uncertain.
@@ -450,7 +450,8 @@ def _date_forms(value: str) -> list[str]:
 
 
 def _tokens(value: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9]+", value.lower()) if t not in _CORP_WORDS}
+    return {t for t in re.findall(r"[a-z0-9]+", value.lower())
+            if len(t) > 1 and t not in _CORP_WORDS}
 
 
 def _union(page: int, row, words: list[Word]) -> Box:
@@ -458,13 +459,31 @@ def _union(page: int, row, words: list[Word]) -> Box:
                x1=max(w.x1 for w in words), y1=row.box.y1)
 
 
-def _find_window(row, targets: list[str], norm, allow_contains: bool) -> Box | None:
-    """Smallest contiguous word window whose normalised text equals (or, if allowed,
-    contains) a target; widened by a directly preceding label (and weekday)."""
-    words = row.words
+def _split_fused(words: list[Word]) -> list[Word]:
+    """Split words fused with a label at a colon ('number:1800...'), x positions
+    divided in proportion to the characters."""
+    out: list[Word] = []
+    for w in words:
+        parts = [p for p in re.split(r"(?<=:)", w.text) if p]
+        if len(parts) < 2 or not w.text:
+            out.append(w)
+            continue
+        x = w.x0
+        for p in parts:
+            nx = x + (w.x1 - w.x0) * len(p) / len(w.text)
+            out.append(Word(text=p, x0=x, x1=nx))
+            x = nx
+    return out
+
+
+def _find_window(row, words: list[Word], targets: list[str], norm,
+                 labels: bool, weekday: bool) -> Box | None:
+    """Smallest contiguous run of WHOLE words whose normalised text equals a target
+    (never part of a word); widened by a directly preceding label / weekday name."""
     keys = [norm(w.text) for w in words]
     texts = [_norm(w.text) for w in words]  # for labels/weekdays, whatever the field
-    best: tuple[int, int, int] | None = None  # (rank, length, start) with end
+    longest = max(len(t) for t in targets)
+    best: tuple[int, int] | None = None  # (length, start)
     best_span = None
     for i, k in enumerate(keys):
         if not k:
@@ -472,22 +491,22 @@ def _find_window(row, targets: list[str], norm, allow_contains: bool) -> Box | N
         acc = ""
         for j in range(i, len(words)):
             acc += keys[j]
-            if not keys[j]:
-                continue
-            exact = acc in targets
-            if exact or (allow_contains and any(t in acc for t in targets)):
-                cand = (0 if exact else 1, len(acc), i)
+            if len(acc) > longest:
+                break
+            if keys[j] and acc in targets:
+                cand = (len(acc), i)
                 if best is None or cand < best:
                     best, best_span = cand, (i, j)
                 break
     if best_span is None:
         return None
     i, j = best_span
-    for k in (3, 2, 1):  # longest preceding label wins
-        if i - k >= 0 and "".join(texts[i - k:i]) in _LABELS:
-            i -= k
-            break
-    if i > 0 and texts[i - 1] in _WEEKDAYS:
+    if labels:
+        for k in (3, 2, 1):  # longest preceding label wins
+            if i - k >= 0 and "".join(texts[i - k:i]) in _LABELS:
+                i -= k
+                break
+    if weekday and i > 0 and texts[i - 1] in _WEEKDAYS:
         i -= 1
     return _union(row.page, row, words[i:j + 1])
 
@@ -526,21 +545,27 @@ def _field_box(attr: str, value: str, cited: list, layout: PdfLayout) -> Box | N
     if not targets:
         return None
 
-    def search(rows: list, allow_contains: bool) -> Box | None:
+    labels = attr in ("vendor_tax_id", "quote_number", "valid_until")
+    weekday = attr == "valid_until"
+
+    def search(rows: list, tolerant: bool) -> Box | None:
         for row in rows:
             if row.words:
-                box = _find_window(row, targets, norm, allow_contains)
-            else:  # no word positions: the row is all we can point at
+                words = _split_fused(row.words) if tolerant else row.words
+                box = _find_window(row, words, targets, norm, labels, weekday)
+            elif tolerant:  # no word positions: the row is all we can point at
                 box = row.box if any(t in norm(row.text) for t in targets) else None
+            else:
+                box = None
             if box is not None:
                 return box
         return None
 
     order = {r.id: n for n, r in enumerate(layout.rows)}
     cited = sorted(cited, key=lambda r: order.get(r.id, 0))
-    box = search(cited, allow_contains=True)
-    if box is None:  # the model may have cited the wrong row
-        box = search(layout.rows, allow_contains=False)
+    # exact whole-word match in any cited row, then tolerant of label-fused words,
+    # then the whole layout (the model may have cited the wrong row)
+    box = search(cited, False) or search(cited, True) or search(layout.rows, False)
     if box is None and cited and not is_id and attr != "valid_until":
         box = _segment_box(cited[0], _tokens(value))
     return box

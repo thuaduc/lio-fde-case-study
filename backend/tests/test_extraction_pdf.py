@@ -17,7 +17,7 @@ from app.main import app
 from app.models import CommodityGroup, Organization
 from app.schemas.extraction import LlmFieldSources, LlmLine, LlmQuote
 from app.services import extraction as svc
-from app.services.pdf_layout import Box, PdfLayout, PdfRow
+from app.services.pdf_layout import Box, PdfLayout, PdfRow, Word
 
 NO_TEXT = "No text found in this PDF — it may be a scan"
 
@@ -745,3 +745,94 @@ def test_verdeform_footer_is_an_image_not_text(quote_bytes):
 def test_prompt_mentions_footer_tax_ids():
     p = svc._build_pdf_prompt("", "")
     assert "footer" in p and "letterhead" in p
+    assert "27-1073640" not in p and "1985704" not in p
+
+
+# --- matching logic on synthetic rows (no PDF) ---
+
+
+def wrow(rid, text, page=1, y0=0.1, gap=0.01):
+    """A row whose words are laid out left to right, one char = 0.01 wide."""
+    words, x = [], 0.1
+    for t in text.split():
+        words.append(Word(text=t, x0=x, x1=x + 0.01 * len(t)))
+        x += 0.01 * len(t) + gap
+    return mkrow(rid, text, page=page, y0=y0, y1=y0 + 0.02, words=words, cw=0.01)
+
+
+def synth(*rows, **kw):
+    lt = lay(*rows)
+    ids = kw.pop("ids", [r.id for r in rows])
+    attr = kw.pop("attr")
+    q = quote([], **kw, field_source_rows=fsr(**{attr: ids}))
+    return lt, svc.resolve_field_sources(q, lt)
+
+
+def words_in(lt, boxes):
+    return covered(lt, boxes)
+
+
+@pytest.mark.parametrize("printed", ["1/27/24", "01/27/2024", "Jan 27, 2024", "January 27, 2024"])
+def test_valid_until_printed_forms(printed):
+    lt, fs = synth(wrow("a", f"Date: 11/28/23 Valid until: {printed}"), attr="valid_until",
+                   valid_until="2024-01-27")
+    assert words_in(lt, fs["validUntil"]) == ["Valid", "until:", *printed.split()]
+
+
+def test_weekday_widening_only_for_dates():
+    lt, fs = synth(wrow("a", "Wednesday, Mar 20, 2024"), attr="valid_until", valid_until="2024-03-20")
+    assert words_in(lt, fs["validUntil"]) == ["Wednesday,", "Mar", "20,", "2024"]
+    lt, fs = synth(wrow("a", "Friday Apple Inc"), attr="vendor_name", vendor_name="Apple")
+    assert words_in(lt, fs["vendorName"]) == ["Apple"]
+
+
+def test_label_included_for_tax_id_not_for_vendor():
+    lt, fs = synth(wrow("a", "Fax 123 EIN: 12-3456789"), attr="vendor_tax_id",
+                   vendor_tax_id="12 3456789")
+    assert words_in(lt, fs["vatId"]) == ["EIN:", "12-3456789"]
+    lt, fs = synth(wrow("a", "Quote No. Q-1 Acme"), attr="vendor_name", vendor_name="Q-1")
+    assert words_in(lt, fs["vendorName"]) == ["Q-1"]
+
+
+def test_label_fused_to_value_is_split():
+    lt, fs = synth(wrow("a", "Customer number:18000010931219"), attr="department",
+                   department="18000010931219")
+    (b,) = fs["department"]
+    w = lt.rows[0].words[1]
+    assert b.x1 == pytest.approx(w.x1) and w.x0 < b.x0 < w.x1
+
+
+@pytest.mark.parametrize("attr,key,value,row,neighbour", [
+    ("quote_number", "quoteNumber", "4120", "Total $14,120.00", "4120"),
+    ("vendor_name", "vendorName", "Apple", "Pineapple Juice", "Apple Inc"),
+    ("valid_until", "validUntil", "2024-01-05", "Valid 11/5/2024", "Valid 1/5/2024"),
+    ("vendor_tax_id", "vatId", "415 5550171", "Phone 14155550171", "Phone 415 5550171"),
+])
+def test_matches_never_inside_a_longer_token(attr, key, value, row, neighbour):
+    lt, fs = synth(wrow("a", row), attr=attr, **{attr: value})
+    assert key not in fs
+    lt, fs = synth(wrow("a", row, y0=0.1), wrow("b", neighbour, y0=0.3), attr=attr, **{attr: value})
+    assert fs[key][0].y0 == pytest.approx(0.3)
+
+
+def test_exact_in_later_cited_row_beats_earlier_fused_hit():
+    early = wrow("a", "Customer number:4120", y0=0.1)
+    late = wrow("b", "Quote 4120", y0=0.4)
+    lt, fs = synth(early, late, attr="quote_number", quote_number="4120")
+    assert fs["quoteNumber"][0].y0 == pytest.approx(0.4)
+
+
+def test_repeats_deduped_first_in_reading_order_wins():
+    rows = [wrow("f2", "Acme GmbH", page=2, y0=0.9), wrow("f1", "Acme GmbH", y0=0.95),
+            wrow("h", "Acme GmbH", y0=0.05)]
+    lt, fs = synth(*sorted(rows, key=lambda r: r.id), attr="vendor_name", vendor_name="Acme GmbH",
+                   ids=["f2", "f1", "h"])
+    # layout order is f1, f2, h; cited order is irrelevant, the first layout row wins
+    assert len(fs["vendorName"]) == 1 and fs["vendorName"][0].page == 1
+    assert fs["vendorName"][0].y0 == pytest.approx(0.95)
+
+
+def test_single_char_tokens_ignored_in_segment_fallback():
+    row = wrow("a", "A Zed Corp", gap=0.05)
+    lt, fs = synth(row, attr="vendor_name", vendor_name="A Quux Ltd")
+    assert "vendorName" not in fs
