@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -37,4 +38,6 @@ async def extract_pdf(file: UploadFile, db: Session = Depends(get_db)) -> Extrac
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a PDF file"
         )
-    return extract_from_pdf(pdf_bytes, db)
+    # Blocking work (pdfplumber + sync OpenAI call): keep it off the event loop.
+    # The Session is created per request and only used inside this one thread.
+    return await run_in_threadpool(extract_from_pdf, pdf_bytes, db)

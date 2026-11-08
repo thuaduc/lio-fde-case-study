@@ -375,9 +375,7 @@ def _missing_fields(data: ExtractedVendorData) -> list[str]:
     return missing
 
 
-def _finish(
-    data: ExtractedVendorData, warnings: list[str], groups: dict[int, str]
-) -> ExtractionResponse:
+def _finish(data: ExtractedVendorData, warnings: list[str]) -> ExtractionResponse:
     return ExtractionResponse(
         success=True,
         data=data,
@@ -452,4 +450,4 @@ def extract_from_pdf(pdf_bytes: bytes, db: Session) -> ExtractionResponse:
         return _fail("Empty response from AI")
 
     data, warnings = to_extracted(quote, layout, groups)
-    return _finish(data, warnings, groups)
+    return _finish(data, warnings)

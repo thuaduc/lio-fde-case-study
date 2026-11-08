@@ -111,7 +111,7 @@ def test_discount_sign_normalised():
 def test_null_tax_id_success():
     data, _ = conv(quote([line(position="1")], vendor_tax_id=None))
     assert data.vat_id == ""
-    resp = svc._finish(data, [], GROUPS)
+    resp = svc._finish(data, [])
     assert resp.success and "Tax ID" in resp.missing_fields
 
 
@@ -229,6 +229,13 @@ def test_length_and_refusal_errors(monkeypatch, db, rows_layout):
     assert not r.success and "I can't help" in r.error
     use(monkeypatch, FakeClient(completion(parsed=None)))
     assert not svc.extract_from_pdf(b"%PDF-", db).success
+
+
+def test_sdk_length_error_readable(monkeypatch, db, rows_layout):
+    exc = openai.LengthFinishReasonError(completion=SimpleNamespace(usage=None))
+    use(monkeypatch, FakeClient(exc=exc))
+    r = svc.extract_from_pdf(b"%PDF-", db)
+    assert not r.success and "too long" in r.error
 
 
 def test_sdk_exception_readable(monkeypatch, db, rows_layout):
